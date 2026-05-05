@@ -73,24 +73,24 @@ npm start -- "your-user-id" "your-password" --format html --out portfolio-report
 Shareable HTML report, omitting quantities, prices, market values, book values, and absolute profit/loss:
 
 ```sh
-npm start -- "your-user-id" "your-password" --format shareable-html > shareable-report.html
+npm start -- "your-user-id" "your-password" --format shareable-html --out shareable-report.html
 ```
 
 Shareable CSV for machine use, with only instrument identity, type/venue/currency, portfolio weight %, and P/L %:
 
 ```sh
-npm start -- "your-user-id" "your-password" --format shareable-csv > shareable-positions.csv
+npm start -- "your-user-id" "your-password" --format shareable-csv --out shareable-positions.csv
 ```
 
-Because output is stdout-first, normal shell composition works too:
+With 1Password and file output:
 
 ```sh
-npm start -- --op-item "Fineco" --format html > portfolio-report.html
-npm start -- --op-item "Fineco" --format csv > positions.csv
-npm start -- --op-item "Fineco" --format shareable-csv > shareable-positions.csv
+npm start -- --op-item "Fineco" --format html --out portfolio-report.html
+npm start -- --op-item "Fineco" --format csv --out positions.csv
+npm start -- --op-item "Fineco" --format shareable-csv --out shareable-positions.csv
 ```
 
-The repository includes a local `.npmrc` that silences npm's script banner, so redirected HTML/CSV output starts with the actual report data.
+Output is still stdout-first when `--out` is omitted, which is useful for shell composition and MCP-style machine use. The repository includes a local `.npmrc` that silences npm's script banner, so stdout contains only the selected format.
 
 ## 1Password
 
