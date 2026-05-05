@@ -579,7 +579,6 @@ function reportHtml(summary: PositionsSummary): string {
   }).format(new Date());
   const total = summary.summary?.show ?? summary.summary?.total ?? {};
   const currencies = summary.filters?.currencies?.show ?? [];
-  const instrumentTypes = summary.filters?.instrumentTypes?.show ?? [];
 
   const rowHtml = [...rows]
     .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
@@ -712,21 +711,6 @@ function reportHtml(summary: PositionsSummary): string {
     .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
     .positive { color: var(--positive); }
     .negative { color: var(--negative); }
-    .chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 0 0 18px;
-    }
-    .chip {
-      background: #e9f3f6;
-      color: var(--accent);
-      border: 1px solid #c8e3ea;
-      border-radius: 999px;
-      padding: 5px 9px;
-      font-size: 12px;
-      font-weight: 650;
-    }
     @media (max-width: 820px) {
       main { width: min(100vw - 20px, 1180px); margin: 20px auto; }
       header { align-items: start; flex-direction: column; }
@@ -751,10 +735,6 @@ function reportHtml(summary: PositionsSummary): string {
       <div class="card"><div class="label">Profit / Loss</div><div class="value ${(total.profitLoss ?? 0) > 0 ? "positive" : (total.profitLoss ?? 0) < 0 ? "negative" : ""}">${formatMoney(total.profitLoss, total.currencyCd)}</div></div>
       <div class="card"><div class="label">Return</div><div class="value ${(total.profitLossPerc ?? 0) > 0 ? "positive" : (total.profitLossPerc ?? 0) < 0 ? "negative" : ""}">${formatPercent(total.profitLossPerc)}</div></div>
     </section>
-
-    <div class="chips">
-      ${instrumentTypes.map((type) => `<span class="chip">${htmlEscape(type)}</span>`).join("")}
-    </div>
 
     <section class="table-wrap" aria-label="Positions">
       <table>
@@ -787,7 +767,6 @@ function shareableReportHtml(summary: PositionsSummary): string {
   const total = summary.summary?.show ?? summary.summary?.total ?? {};
   const totalMarketValue = total.marketValue ?? 0;
   const currencies = summary.filters?.currencies?.show ?? [];
-  const instrumentTypes = summary.filters?.instrumentTypes?.show ?? [];
 
   const rowHtml = [...rows]
     .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
@@ -886,16 +865,6 @@ function shareableReportHtml(summary: PositionsSummary): string {
       font-size: 13px;
       margin-top: 6px;
     }
-    .note {
-      background: #e9f3f6;
-      border: 1px solid #c8e3ea;
-      color: var(--accent);
-      border-radius: 8px;
-      padding: 12px 14px;
-      font-size: 14px;
-      font-weight: 650;
-      margin-bottom: 18px;
-    }
     .table-wrap {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -929,21 +898,6 @@ function shareableReportHtml(summary: PositionsSummary): string {
     .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
     .positive { color: var(--positive); }
     .negative { color: var(--negative); }
-    .chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 0 0 18px;
-    }
-    .chip {
-      background: #e9f3f6;
-      color: var(--accent);
-      border: 1px solid #c8e3ea;
-      border-radius: 999px;
-      padding: 5px 9px;
-      font-size: 12px;
-      font-weight: 650;
-    }
     @media (max-width: 720px) {
       main { width: min(100vw - 20px, 960px); margin: 20px auto; }
       header { align-items: start; flex-direction: column; }
@@ -966,12 +920,6 @@ function shareableReportHtml(summary: PositionsSummary): string {
       <div class="card"><div class="label">Portfolio Return</div><div class="value ${(total.profitLossPerc ?? 0) > 0 ? "positive" : (total.profitLossPerc ?? 0) < 0 ? "negative" : ""}">${formatPercent(total.profitLossPerc)}</div></div>
       <div class="card"><div class="label">Positions</div><div class="value">${rows.length}</div></div>
     </section>
-
-    <div class="note">Shareable mode omits quantities, prices, market values, book values, and absolute profit/loss. It only shows asset weights and percentage performance.</div>
-
-    <div class="chips">
-      ${instrumentTypes.map((type) => `<span class="chip">${htmlEscape(type)}</span>`).join("")}
-    </div>
 
     <section class="table-wrap" aria-label="Shareable positions">
       <table>
