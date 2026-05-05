@@ -1,6 +1,6 @@
 # fineco-helper
 
-A small local helper for exporting your Fineco portfolio positions as JSON, CSV, raw API JSON, or a clean HTML report.
+A small local helper for exporting your Fineco portfolio positions as JSON, CSV, raw API JSON, a clean HTML report, or shareable reports that hide actual values.
 
 ![Example report using fake demo data](docs/example-report.svg)
 
@@ -70,11 +70,24 @@ HTML report to a file:
 npm start -- "your-user-id" "your-password" --format html --out portfolio-report.html
 ```
 
+Shareable HTML report, omitting quantities, prices, market values, book values, and absolute profit/loss:
+
+```sh
+npm start -- "your-user-id" "your-password" --format shareable-html > shareable-report.html
+```
+
+Shareable CSV for machine use, with only instrument identity, type/venue/currency, portfolio weight %, and P/L %:
+
+```sh
+npm start -- "your-user-id" "your-password" --format shareable-csv > shareable-positions.csv
+```
+
 Because output is stdout-first, normal shell composition works too:
 
 ```sh
 npm start -- --op-item "Fineco" --format html > portfolio-report.html
 npm start -- --op-item "Fineco" --format csv > positions.csv
+npm start -- --op-item "Fineco" --format shareable-csv > shareable-positions.csv
 ```
 
 ## 1Password
@@ -105,7 +118,7 @@ FINECO_PASSWORD          Fineco password.
 FINECO_OP_ITEM           1Password item name.
 FINECO_OP_USER_FIELD     1Password user id field. Default: username.
 FINECO_OP_PASSWORD_FIELD 1Password password field. Default: password.
-FINECO_OUTPUT            json, raw, csv, or html. Default: json.
+FINECO_OUTPUT            json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
 FINECO_DEBUG             Set to 1 for secret-safe request diagnostics.
 FINECO_POSITIONS_URL     Override Fineco positions endpoint.
 ```

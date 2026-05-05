@@ -15,7 +15,13 @@ const PORTFOLIO_URL =
 const POSITIONS_SUMMARY_URL =
   "https://private-api.finecobank.com/v1/private/tol/positions/summary?type=sintesi";
 
-type OutputFormat = "json" | "raw" | "csv" | "html";
+type OutputFormat =
+  | "json"
+  | "raw"
+  | "csv"
+  | "html"
+  | "shareable-html"
+  | "shareable-csv";
 
 type CliArgs =
   | {
@@ -132,8 +138,8 @@ const browserHeaders = {
 
 function usage(): string {
   return `Usage:
-  npm start -- USER PASSWORD [--format json|raw|csv|html] [--out path]
-  npm start -- --op-item "Fineco" [--format json|raw|csv|html] [--out path]
+  npm start -- USER PASSWORD [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
+  npm start -- --op-item "Fineco" [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
 
 Credentials:
   USER PASSWORD          Fineco user id and password.
@@ -141,12 +147,14 @@ Credentials:
   FINECO_USER_ID/PASSWORD and FINECO_OP_ITEM work too.
 
 Output:
-  --format FORMAT        json, raw, csv, or html. Default: json.
+  --format FORMAT        json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
   --out PATH             Write output to a file instead of stdout.
 
 Examples:
   npm start -- 12345678 'secret'
   npm start -- --op-item Fineco --format html > portfolio-report.html
+  npm start -- --op-item Fineco --format shareable-html > shareable-report.html
+  npm start -- --op-item Fineco --format shareable-csv > shareable-positions.csv
   npm start -- 12345678 'secret' --format csv --out positions.csv
 `;
 }
@@ -279,12 +287,14 @@ function parseOutputFormat(value: string | undefined): OutputFormat {
     value === "json" ||
     value === "raw" ||
     value === "csv" ||
-    value === "html"
+    value === "html" ||
+    value === "shareable-html" ||
+    value === "shareable-csv"
   ) {
     return value;
   }
   throw new Error(
-    `Unsupported format "${value}". Use json, raw, csv, or html.`,
+    `Unsupported format "${value}". Use json, raw, csv, html, shareable-html, or shareable-csv.`,
   );
 }
 
@@ -468,6 +478,54 @@ function toCsv(rows: Position[]): string {
     ...rows.map((row) =>
       headers.map((header) => quote(row[header as keyof Position])).join(","),
     ),
+  ].join("\n");
+}
+
+function shareableRows(
+  summary: PositionsSummary,
+): Array<Record<string, string>> {
+  const rows = positionsAsRows(summary);
+  const total = summary.summary?.show ?? summary.summary?.total ?? {};
+  const totalMarketValue = total.marketValue ?? 0;
+
+  return [...rows]
+    .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
+    .map((position) => {
+      const weight =
+        totalMarketValue > 0 && typeof position.marketValue === "number"
+          ? (position.marketValue / totalMarketValue) * 100
+          : undefined;
+
+      return {
+        description: String(position.description ?? ""),
+        symbol: String(position.symbol ?? ""),
+        instrId: String(position.instrId ?? ""),
+        venueSystem: String(position.venueSystem ?? ""),
+        type: String(position.type ?? ""),
+        currencyCd: String(position.currencyCd ?? ""),
+        weightPerc:
+          typeof weight === "number" && Number.isFinite(weight)
+            ? String(weight)
+            : "",
+        profitLossPerc:
+          typeof position.profitLossPerc === "number" &&
+          Number.isFinite(position.profitLossPerc)
+            ? String(position.profitLossPerc)
+            : "",
+      };
+    });
+}
+
+function toRecordCsv(rows: Array<Record<string, string>>): string {
+  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const quote = (value: unknown): string => {
+    const text = value == null ? "" : String(value);
+    return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+
+  return [
+    headers.map(quote).join(","),
+    ...rows.map((row) => headers.map((header) => quote(row[header])).join(",")),
   ].join("\n");
 }
 
@@ -720,6 +778,218 @@ function reportHtml(summary: PositionsSummary): string {
 </html>`;
 }
 
+function shareableReportHtml(summary: PositionsSummary): string {
+  const rows = positionsAsRows(summary);
+  const capturedAtText = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "full",
+    timeStyle: "medium",
+  }).format(new Date());
+  const total = summary.summary?.show ?? summary.summary?.total ?? {};
+  const totalMarketValue = total.marketValue ?? 0;
+  const currencies = summary.filters?.currencies?.show ?? [];
+  const instrumentTypes = summary.filters?.instrumentTypes?.show ?? [];
+
+  const rowHtml = [...rows]
+    .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
+    .map((position) => {
+      const profitLossPerc = position.profitLossPerc ?? 0;
+      const profitClass =
+        profitLossPerc > 0 ? "positive" : profitLossPerc < 0 ? "negative" : "";
+      const weight =
+        totalMarketValue > 0 && typeof position.marketValue === "number"
+          ? (position.marketValue / totalMarketValue) * 100
+          : undefined;
+
+      return `<tr>
+        <td>
+          <div class="asset">${htmlEscape(position.description)}</div>
+          <div class="meta">${htmlEscape(position.symbol || position.instrId)} · ${htmlEscape(position.venueSystem)} · ${htmlEscape(position.type)}</div>
+        </td>
+        <td class="num strong">${formatPercent(weight)}</td>
+        <td class="num ${profitClass}">${formatPercent(position.profitLossPerc)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fineco Shareable Portfolio Report</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --panel: #ffffff;
+      --ink: #182026;
+      --muted: #69757f;
+      --line: #dde4e8;
+      --positive: #087443;
+      --negative: #b42318;
+      --accent: #006b8f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main {
+      width: min(960px, calc(100vw - 32px));
+      margin: 32px auto;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .captured {
+      color: var(--muted);
+      font-size: 14px;
+      text-align: right;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: 8px;
+    }
+    .value {
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .note {
+      background: #e9f3f6;
+      border: 1px solid #c8e3ea;
+      color: var(--accent);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 14px;
+      font-weight: 650;
+      margin-bottom: 18px;
+    }
+    .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 700px;
+    }
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: left;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      background: #fbfcfd;
+      position: sticky;
+      top: 0;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .strong { font-weight: 700; }
+    .asset { font-weight: 650; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .positive { color: var(--positive); }
+    .negative { color: var(--negative); }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 18px;
+    }
+    .chip {
+      background: #e9f3f6;
+      color: var(--accent);
+      border: 1px solid #c8e3ea;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    @media (max-width: 720px) {
+      main { width: min(100vw - 20px, 960px); margin: 20px auto; }
+      header { align-items: start; flex-direction: column; }
+      .captured { text-align: left; }
+      .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Fineco Shareable Portfolio Report</h1>
+        <div class="subtle">${rows.length} positions · ${htmlEscape(currencies.join(", "))}</div>
+      </div>
+      <div class="captured">Captured<br>${htmlEscape(capturedAtText)}</div>
+    </header>
+
+    <section class="cards" aria-label="Portfolio summary">
+      <div class="card"><div class="label">Portfolio Return</div><div class="value ${(total.profitLossPerc ?? 0) > 0 ? "positive" : (total.profitLossPerc ?? 0) < 0 ? "negative" : ""}">${formatPercent(total.profitLossPerc)}</div></div>
+      <div class="card"><div class="label">Positions</div><div class="value">${rows.length}</div></div>
+    </section>
+
+    <div class="note">Shareable mode omits quantities, prices, market values, book values, and absolute profit/loss. It only shows asset weights and percentage performance.</div>
+
+    <div class="chips">
+      ${instrumentTypes.map((type) => `<span class="chip">${htmlEscape(type)}</span>`).join("")}
+    </div>
+
+    <section class="table-wrap" aria-label="Shareable positions">
+      <table>
+        <thead>
+          <tr>
+            <th>Instrument</th>
+            <th class="num">Weight</th>
+            <th class="num">P/L %</th>
+          </tr>
+        </thead>
+        <tbody>${rowHtml}</tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
   const rows = positionsAsRows(summary);
 
@@ -733,6 +1003,14 @@ function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
 
   if (format === "html") {
     return reportHtml(summary);
+  }
+
+  if (format === "shareable-html") {
+    return shareableReportHtml(summary);
+  }
+
+  if (format === "shareable-csv") {
+    return toRecordCsv(shareableRows(summary));
   }
 
   return JSON.stringify(
