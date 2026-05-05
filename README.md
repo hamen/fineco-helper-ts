@@ -1,6 +1,6 @@
 # fineco-helper
 
-A small local helper for exporting your Fineco portfolio positions as JSON, CSV, and a clean HTML report.
+A small local helper for exporting your Fineco portfolio positions as JSON, CSV, raw API JSON, or a clean HTML report.
 
 ![Example report using fake demo data](docs/example-report.svg)
 
@@ -12,18 +12,9 @@ A small local helper for exporting your Fineco portfolio positions as JSON, CSV,
 - It does not store your Fineco username or password.
 - It does not send your portfolio data to any third-party service.
 - It only talks to Fineco endpoints needed to log in, fetch positions, and log out.
-- Generated reports are written only to your local filesystem.
+- Output goes to stdout by default, or to a local file when you pass `--out`.
 
 Credentials are read from command-line arguments, environment variables, or the 1Password CLI. They are used for the login request and are not printed.
-
-## What It Does
-
-1. Creates the same public-session cookies Fineco expects from the web app.
-2. Logs in to Fineco.
-3. Calls Fineco's private positions summary endpoint.
-4. Writes `portfolio-report.html`.
-5. Prints JSON, CSV, or raw API JSON to stdout.
-6. Calls Fineco logout.
 
 ## Install
 
@@ -45,38 +36,45 @@ Or use 1Password CLI:
 npm start -- --op-item "Fineco"
 ```
 
-The default run writes:
+By default, `fineco-helper` prints compact portfolio JSON to stdout.
 
-```text
-portfolio-report.html
-```
+## Formats
 
-and prints JSON to stdout.
-
-## Output Formats
-
-JSON is the default:
+JSON summary and rows:
 
 ```sh
-npm start -- "your-user-id" "your-password"
+npm start -- "your-user-id" "your-password" --format json
 ```
 
 CSV:
 
 ```sh
-FINECO_OUTPUT=csv npm start -- "your-user-id" "your-password"
+npm start -- "your-user-id" "your-password" --format csv
 ```
 
 Raw Fineco API response:
 
 ```sh
-FINECO_OUTPUT=raw npm start -- "your-user-id" "your-password"
+npm start -- "your-user-id" "your-password" --format raw
 ```
 
-Change the report path:
+HTML report to stdout:
 
 ```sh
-FINECO_HTML_REPORT=my-report.html npm start -- "your-user-id" "your-password"
+npm start -- "your-user-id" "your-password" --format html
+```
+
+HTML report to a file:
+
+```sh
+npm start -- "your-user-id" "your-password" --format html --out portfolio-report.html
+```
+
+Because output is stdout-first, normal shell composition works too:
+
+```sh
+npm start -- --op-item "Fineco" --format html > portfolio-report.html
+npm start -- --op-item "Fineco" --format csv > positions.csv
 ```
 
 ## 1Password
@@ -99,16 +97,17 @@ FINECO_OP_ITEM="Fineco" npm start
 
 ## Environment Variables
 
+The CLI should cover normal use. These env vars are available for credentials and uncommon tweaks:
+
 ```text
-FINECO_USER_ID          Fineco user id.
-FINECO_PASSWORD         Fineco password.
-FINECO_OP_ITEM          1Password item name.
-FINECO_OP_USER_FIELD    1Password user id field. Default: username.
+FINECO_USER_ID           Fineco user id.
+FINECO_PASSWORD          Fineco password.
+FINECO_OP_ITEM           1Password item name.
+FINECO_OP_USER_FIELD     1Password user id field. Default: username.
 FINECO_OP_PASSWORD_FIELD 1Password password field. Default: password.
-FINECO_HTML_REPORT      HTML report path. Default: portfolio-report.html.
-FINECO_OUTPUT           json, csv, or raw. Default: json.
-FINECO_DEBUG            Set to 1 for secret-safe request diagnostics.
-FINECO_POSITIONS_URL    Override Fineco positions endpoint.
+FINECO_OUTPUT            json, raw, csv, or html. Default: json.
+FINECO_DEBUG             Set to 1 for secret-safe request diagnostics.
+FINECO_POSITIONS_URL     Override Fineco positions endpoint.
 ```
 
 ## Development

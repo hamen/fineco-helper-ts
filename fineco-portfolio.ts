@@ -14,22 +14,38 @@ const PORTFOLIO_URL =
   "https://finecobank.com/pvt/portfolio/trading-summary/home";
 const POSITIONS_SUMMARY_URL =
   "https://private-api.finecobank.com/v1/private/tol/positions/summary?type=sintesi";
-const DEFAULT_REPORT_PATH = "portfolio-report.html";
 
-type OutputFormat = "json" | "csv" | "raw";
+type OutputFormat = "json" | "raw" | "csv" | "html";
 
 type CliArgs =
-  | { kind: "empty" }
-  | { kind: "help" }
-  | { kind: "credentials"; userId: string; password: string }
-  | { kind: "onePassword"; itemName: string };
+  | {
+      kind: "empty";
+      format: OutputFormat | undefined;
+      outPath: string | undefined;
+    }
+  | {
+      kind: "help";
+    }
+  | {
+      kind: "credentials";
+      userId: string;
+      password: string;
+      format: OutputFormat | undefined;
+      outPath: string | undefined;
+    }
+  | {
+      kind: "onePassword";
+      itemName: string;
+      format: OutputFormat | undefined;
+      outPath: string | undefined;
+    };
 
 type Config = {
   userId: string;
   password: string;
   debug: boolean;
-  htmlReportPath: string;
   output: OutputFormat;
+  outPath: string | undefined;
   positionsUrl: string;
   syntheticCookies: boolean;
 };
@@ -116,10 +132,8 @@ const browserHeaders = {
 
 function usage(): string {
   return `Usage:
-  npm start -- USER PASSWORD
-  npm start -- --op-item "Fineco"
-  npx tsx fineco-portfolio.ts USER PASSWORD
-  npx tsx fineco-portfolio.ts --op-item "Fineco"
+  npm start -- USER PASSWORD [--format json|raw|csv|html] [--out path]
+  npm start -- --op-item "Fineco" [--format json|raw|csv|html] [--out path]
 
 Credentials:
   USER PASSWORD          Fineco user id and password.
@@ -127,32 +141,92 @@ Credentials:
   FINECO_USER_ID/PASSWORD and FINECO_OP_ITEM work too.
 
 Output:
-  Console output defaults to JSON.
-  HTML report defaults to ${DEFAULT_REPORT_PATH}.
+  --format FORMAT        json, raw, csv, or html. Default: json.
+  --out PATH             Write output to a file instead of stdout.
 
 Examples:
   npm start -- 12345678 'secret'
-  npm start -- --op-item Fineco
+  npm start -- --op-item Fineco --format html > portfolio-report.html
+  npm start -- 12345678 'secret' --format csv --out positions.csv
 `;
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  if (argv.length === 0) return { kind: "empty" };
-  const firstArg = argv[0];
+  const positional: string[] = [];
+  let itemName: string | undefined;
+  let format: OutputFormat | undefined;
+  let outPath: string | undefined;
 
-  if (argv.length === 1 && firstArg && ["--help", "-h"].includes(firstArg)) {
-    return { kind: "help" };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg) continue;
+
+    if (arg === "--help" || arg === "-h") return { kind: "help" };
+
+    if (arg === "--op-item") {
+      itemName = argv[index + 1];
+      if (!itemName || itemName.startsWith("--")) {
+        throw new Error("Expected item name after --op-item.");
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--op-item=")) {
+      itemName = arg.slice("--op-item=".length);
+      if (!itemName) throw new Error("Expected item name after --op-item.");
+      continue;
+    }
+
+    if (arg === "--format") {
+      format = parseOutputFormat(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--format=")) {
+      format = parseOutputFormat(arg.slice("--format=".length));
+      continue;
+    }
+
+    if (arg === "--out") {
+      outPath = argv[index + 1];
+      if (!outPath || outPath.startsWith("--")) {
+        throw new Error("Expected path after --out.");
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--out=")) {
+      outPath = arg.slice("--out=".length);
+      if (!outPath) throw new Error("Expected path after --out.");
+      continue;
+    }
+
+    if (arg.startsWith("--")) {
+      throw new Error(`Unknown option: ${arg}`);
+    }
+
+    positional.push(arg);
   }
-  if (firstArg === "--op-item" && argv.length === 2) {
-    const itemName = argv[1];
-    if (!itemName) throw new Error("Expected item name after --op-item.");
-    return { kind: "onePassword", itemName };
+
+  if (itemName && positional.length > 0) {
+    throw new Error("Use either USER PASSWORD or --op-item ITEM, not both.");
   }
-  if (argv.length === 2 && argv.every((arg) => !arg.startsWith("--"))) {
-    const [userId, password] = argv;
-    if (!userId || !password) throw new Error("Expected USER PASSWORD.");
-    return { kind: "credentials", userId, password };
+
+  if (itemName) return { kind: "onePassword", itemName, format, outPath };
+  if (positional.length === 0) return { kind: "empty", format, outPath };
+  if (positional.length === 2) {
+    return {
+      kind: "credentials",
+      userId: positional[0]!,
+      password: positional[1]!,
+      format,
+      outPath,
+    };
   }
+
   throw new Error("Expected USER PASSWORD or --op-item ITEM.");
 }
 
@@ -201,9 +275,16 @@ async function credentialsFrom1Password(
 
 function parseOutputFormat(value: string | undefined): OutputFormat {
   if (!value) return "json";
-  if (value === "csv" || value === "raw" || value === "json") return value;
+  if (
+    value === "json" ||
+    value === "raw" ||
+    value === "csv" ||
+    value === "html"
+  ) {
+    return value;
+  }
   throw new Error(
-    `Unsupported FINECO_OUTPUT "${value}". Use json, csv, or raw.`,
+    `Unsupported format "${value}". Use json, raw, csv, or html.`,
   );
 }
 
@@ -243,8 +324,8 @@ async function configFromArgsAndEnv(): Promise<Config> {
     userId,
     password,
     debug: process.env.FINECO_DEBUG === "1",
-    htmlReportPath: process.env.FINECO_HTML_REPORT ?? DEFAULT_REPORT_PATH,
-    output: parseOutputFormat(process.env.FINECO_OUTPUT),
+    output: args.format ?? parseOutputFormat(process.env.FINECO_OUTPUT),
+    outPath: args.outPath,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
@@ -639,6 +720,44 @@ function reportHtml(summary: PositionsSummary): string {
 </html>`;
 }
 
+function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
+  const rows = positionsAsRows(summary);
+
+  if (format === "raw") {
+    return JSON.stringify(summary, null, 2);
+  }
+
+  if (format === "csv") {
+    return toCsv(rows);
+  }
+
+  if (format === "html") {
+    return reportHtml(summary);
+  }
+
+  return JSON.stringify(
+    {
+      summary: summary.summary,
+      rows,
+      rowCount: rows.length,
+    },
+    null,
+    2,
+  );
+}
+
+async function emitOutput(
+  content: string,
+  outPath: string | undefined,
+): Promise<void> {
+  if (outPath) {
+    await writeFile(outPath, content);
+    return;
+  }
+
+  console.log(content);
+}
+
 async function fetchPositionsSummary(
   config: Config,
   cookie: string,
@@ -806,27 +925,8 @@ async function main(): Promise<void> {
     );
     if (!summary.ok) throw new Error(summary.error);
 
-    await writeFile(config.htmlReportPath, reportHtml(summary.data));
-    debug(`HTML report saved to ${config.htmlReportPath}`);
-
-    const rows = positionsAsRows(summary.data);
-    if (config.output === "raw") {
-      console.log(JSON.stringify(summary.data, null, 2));
-    } else if (config.output === "csv") {
-      console.log(toCsv(rows));
-    } else {
-      console.log(
-        JSON.stringify(
-          {
-            summary: summary.data.summary,
-            rows,
-            rowCount: rows.length,
-          },
-          null,
-          2,
-        ),
-      );
-    }
+    await emitOutput(renderOutput(summary.data, config.output), config.outPath);
+    if (config.outPath) debug(`Output saved to ${config.outPath}`);
   } finally {
     await logout(authenticatedCookie, debug);
   }
