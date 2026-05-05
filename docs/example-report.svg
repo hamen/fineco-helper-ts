@@ -28,15 +28,6 @@
   </g>
 
   <g transform="translate(86 331)">
-    <rect width="52" height="32" rx="16" fill="#E9F3F6" stroke="#C8E3EA"/>
-    <text x="26" y="22" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="700" fill="#006B8F">etf</text>
-    <rect x="66" width="74" height="32" rx="16" fill="#E9F3F6" stroke="#C8E3EA"/>
-    <text x="103" y="22" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="700" fill="#006B8F">equity</text>
-    <rect x="154" width="64" height="32" rx="16" fill="#E9F3F6" stroke="#C8E3EA"/>
-    <text x="186" y="22" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="700" fill="#006B8F">fund</text>
-  </g>
-
-  <g transform="translate(86 392)">
     <rect width="1216" height="448" rx="8" fill="#FFFFFF" stroke="#DDE4E8"/>
     <rect width="1216" height="54" rx="8" fill="#FBFCFD"/>
     <path d="M0 54H1216" stroke="#DDE4E8"/>
