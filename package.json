@@ -9,7 +9,13 @@
     "build": "tsc",
     "start": "npm run build --silent && node dist/fineco-portfolio.js",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write fineco-portfolio.ts README.md package.json tsconfig.json"
+    "test": "npx tsx --test tests/*.test.ts",
+    "format": "prettier --write fineco-portfolio.ts mcp-server.ts README.md package.json tsconfig.json",
+    "mcp": "npm run build --silent && node dist/mcp-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.25.1"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

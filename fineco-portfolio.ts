@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -12,10 +14,10 @@ const LOGOUT_URL =
   "https://private-api.finecobank.com/v1/private/authentications/logout";
 const PORTFOLIO_URL =
   "https://finecobank.com/pvt/portfolio/trading-summary/home";
-const POSITIONS_SUMMARY_URL =
+export const POSITIONS_SUMMARY_URL =
   "https://private-api.finecobank.com/v1/private/tol/positions/summary?type=sintesi";
 
-type OutputFormat =
+export type OutputFormat =
   | "json"
   | "raw"
   | "csv"
@@ -46,7 +48,7 @@ type CliArgs =
       outPath: string | undefined;
     };
 
-type Config = {
+export type Config = {
   userId: string;
   password: string;
   debug: boolean;
@@ -73,7 +75,7 @@ type OnePasswordItem = {
 
 type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
-type Position = {
+export type Position = {
   instrId?: string;
   venueSystem?: string;
   currencyCd?: string;
@@ -89,7 +91,7 @@ type Position = {
   symbol?: string;
 };
 
-type PositionsSummary = {
+export type PositionsSummary = {
   positions?: {
     show?: Position[];
   };
@@ -107,7 +109,7 @@ type PositionsSummary = {
   };
 };
 
-type PortfolioTotals = {
+export type PortfolioTotals = {
   currencyCd?: string;
   bookValue?: number;
   marketValue?: number;
@@ -251,7 +253,7 @@ function opFieldValue(
   return field?.value;
 }
 
-async function credentialsFrom1Password(
+export async function credentialsFrom1Password(
   itemName: string,
 ): Promise<Pick<Config, "userId" | "password">> {
   const { stdout } = await execFileAsync("op", [
@@ -424,7 +426,7 @@ function syntheticPublicCookies(): string {
   );
 }
 
-function makeLogger(config: Config): (message: string) => void {
+export function makeLogger(config: Config): (message: string) => void {
   return (message) => {
     if (config.debug) console.error(message);
   };
@@ -466,7 +468,7 @@ async function fetchWithCookieJar(
   throw new Error(`Too many redirects while fetching ${url}`);
 }
 
-function toCsv(rows: Position[]): string {
+export function toCsv(rows: Position[]): string {
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   const quote = (value: unknown): string => {
     const text = value == null ? "" : String(value);
@@ -567,11 +569,11 @@ function formatPercent(value: number | undefined): string {
     : "";
 }
 
-function positionsAsRows(summary: PositionsSummary): Position[] {
+export function positionsAsRows(summary: PositionsSummary): Position[] {
   return summary.positions?.show ?? [];
 }
 
-function reportHtml(summary: PositionsSummary): string {
+export function reportHtml(summary: PositionsSummary): string {
   const rows = positionsAsRows(summary);
   const capturedAtText = new Intl.DateTimeFormat("en-GB", {
     dateStyle: "full",
@@ -938,7 +940,7 @@ function shareableReportHtml(summary: PositionsSummary): string {
 </html>`;
 }
 
-function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
+export function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
   const rows = positionsAsRows(summary);
 
   if (format === "raw") {
@@ -984,7 +986,7 @@ async function emitOutput(
   console.log(content);
 }
 
-async function fetchPositionsSummary(
+export async function fetchPositionsSummary(
   config: Config,
   cookie: string,
   debug: (message: string) => void,
@@ -1030,7 +1032,7 @@ async function fetchPositionsSummary(
   }
 }
 
-async function logout(
+export async function logout(
   cookie: string,
   debug: (message: string) => void,
 ): Promise<void> {
@@ -1063,7 +1065,7 @@ async function logout(
   }
 }
 
-async function login(
+export async function login(
   config: Config,
   debug: (message: string) => void,
 ): Promise<string> {
@@ -1158,8 +1160,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(`${(error as Error).message}\n`);
-  console.error(usage());
-  process.exit(1);
-});
+const __filename = fileURLToPath(import.meta.url);
+if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename)) {
+  main().catch((error: unknown) => {
+    console.error(`${(error as Error).message}\n`);
+    console.error(usage());
+    process.exit(1);
+  });
+}
