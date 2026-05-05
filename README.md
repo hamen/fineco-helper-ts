@@ -90,6 +90,8 @@ npm start -- --op-item "Fineco" --format csv > positions.csv
 npm start -- --op-item "Fineco" --format shareable-csv > shareable-positions.csv
 ```
 
+The repository includes a local `.npmrc` that silences npm's script banner, so redirected HTML/CSV output starts with the actual report data.
+
 ## 1Password
 
 By default, `--op-item` reads fields named `username` and `password`.
