@@ -940,7 +940,7 @@ function shareableReportHtml(summary: PositionsSummary): string {
 </html>`;
 }
 
-function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
+export function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
   const rows = positionsAsRows(summary);
 
   if (format === "raw") {
