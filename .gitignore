@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# Local reports and captured pages may contain private portfolio/session data.
+*.html
+*.local.html
+*.local.json
+*.local.csv
+
+.DS_Store
+*.log
