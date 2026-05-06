@@ -16,7 +16,7 @@ function spawnServer(
 }
 
 describe("MCP server", () => {
-  it("exposes get_portfolio and generate_report tools", async () => {
+  it("exposes portfolio and market tools", async () => {
     const transport = spawnServer({
       FINECO_USER_ID: "test",
       FINECO_PASSWORD: "test",
@@ -28,8 +28,16 @@ describe("MCP server", () => {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
 
-      assert.deepEqual(names, ["generate_report", "get_portfolio"]);
-      assert.equal(tools.length, 2);
+      assert.deepEqual(names, [
+        "fineco_logout",
+        "fineco_session_status",
+        "generate_report",
+        "get_asset_details",
+        "get_market_indices",
+        "get_portfolio",
+        "search_asset",
+      ]);
+      assert.equal(tools.length, 7);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -44,6 +52,82 @@ describe("MCP server", () => {
         JSON.stringify(genRpt.inputSchema).includes("output_path"),
         "generate_report should have an output_path parameter",
       );
+
+      const search = tools.find((t) => t.name === "search_asset")!;
+      assert.ok(
+        JSON.stringify(search.inputSchema).includes("query"),
+        "search_asset should have a query parameter",
+      );
+
+      const details = tools.find((t) => t.name === "get_asset_details")!;
+      assert.ok(
+        JSON.stringify(details.inputSchema).includes("instrument"),
+        "get_asset_details should have an instrument parameter",
+      );
+
+      const status = tools.find((t) => t.name === "fineco_session_status")!;
+      assert.ok(status, "fineco_session_status should be exposed");
+
+      const logout = tools.find((t) => t.name === "fineco_logout")!;
+      assert.ok(logout, "fineco_logout should be exposed");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("reports session status without logging in", async () => {
+    const transport = spawnServer({
+      FINECO_USER_ID: "test",
+      FINECO_PASSWORD: "test",
+    });
+    const client = new Client({ name: "test-client", version: "0.1.0" });
+
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({
+        name: "fineco_session_status",
+        arguments: {},
+      });
+
+      assert.equal(result.isError, undefined);
+      const text =
+        (result.content as Array<{ type: string; text: string }>)[0]?.text ??
+        "";
+      const status = JSON.parse(text) as {
+        authenticated: boolean;
+        loginInFlight: boolean;
+        maxAgeMs: number;
+        maxIdleMs: number;
+      };
+
+      assert.equal(status.authenticated, false);
+      assert.equal(status.loginInFlight, false);
+      assert.ok(status.maxAgeMs > 0);
+      assert.ok(status.maxIdleMs > 0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("logout is safe when no session exists", async () => {
+    const transport = spawnServer({
+      FINECO_USER_ID: "test",
+      FINECO_PASSWORD: "test",
+    });
+    const client = new Client({ name: "test-client", version: "0.1.0" });
+
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({
+        name: "fineco_logout",
+        arguments: {},
+      });
+
+      assert.equal(result.isError, undefined);
+      const text =
+        (result.content as Array<{ type: string; text: string }>)[0]?.text ??
+        "";
+      assert.equal(text, "No Fineco session was active.");
     } finally {
       await client.close();
     }

@@ -16,6 +16,127 @@ const PORTFOLIO_URL =
   "https://finecobank.com/pvt/portfolio/trading-summary/home";
 export const POSITIONS_SUMMARY_URL =
   "https://private-api.finecobank.com/v1/private/tol/positions/summary?type=sintesi";
+export const MARKET_SEARCH_URL =
+  "https://private-api.finecobank.com/v1/private/tol/stocklists/search/global";
+export const ASSET_DETAILS_URL =
+  "https://private-api.finecobank.com/v1/private/tol/instruments/static/search";
+export const MARKET_INDICES_URL =
+  "https://private-api.finecobank.com/v1/private/tol/indicesbar/indices";
+export const SNAPSHOT_URL =
+  "https://private-api.finecobank.com/v1/private/snapshot";
+export const INSTRUMENT_SNAPSHOT_URL =
+  "https://private-api.finecobank.com/v1/private/tol/instruments/snapshot";
+export const CHART_DATA_URL =
+  "https://private-api.finecobank.com/v1/private/tol/chart/data";
+export const LINKED_INDICES_URL =
+  "https://private-api.finecobank.com/v1/private/tol/indices/byid";
+export const ECONOMIC_EVENTS_URL =
+  "https://private-api.finecobank.com/v1/private/tol/economicagenda/upcoming-events";
+export const SIMILAR_INSTRUMENTS_URL =
+  "https://private-api.finecobank.com/v1/private/tol/instrumenttool/similar";
+export const NEWS_URL =
+  "https://private-api.finecobank.com/v2/private/fns/search/news";
+export const INSTRUMENT_LIST_URL =
+  "https://private-api.finecobank.com/v1/private/tol/instruments/list/search";
+
+type CliCommand =
+  | "portfolio"
+  | "search-asset"
+  | "asset-details"
+  | "market-indices";
+
+const assetDetailFields = [
+  "instrId",
+  "venueSystem",
+  "description",
+  "symbol",
+  "underlyingInstrId",
+  "underlyingVenueSystem",
+  "subVenueSystem",
+  "instrTyp",
+  "newType",
+  "ricReuters",
+  "levaMargMinIntrPro",
+  "levaMargMinIntr",
+  "levaMargMinOver",
+  "levaMargMinOverPro",
+  "levaDeltaStopIntr",
+  "levaDeltaStopOver",
+  "multiplicativeFactor",
+  "currencyCd",
+  "maxLotPerPosition",
+  "overnightExpiryDate",
+  "valueAtRisk",
+  "flagsRisk",
+  "flagPriips",
+  "underlyingType",
+  "backofficeInstrumentType",
+  "dependingInstrId",
+  "dependingInstrIdUk",
+  "tradingType",
+  "issuer",
+  "tradableStartDate",
+  "opExpire",
+  "cwExpire",
+  "cwWhat",
+  "callPut",
+  "logoId",
+  "bondVenues",
+  "forcedMinimumTick",
+  "feedSymbol",
+  "cwIssuer",
+  "issueDate",
+  "cwUnderlyingLabel",
+  "strikePrice",
+  "bondFrequency",
+  "bondCouponRate",
+  "bondCouponTyp",
+  "bondMaturityDate",
+  "bondExpiryDate",
+  "rating",
+  "issuerRating",
+  "minQty",
+  "bondSubordinate",
+  "bailin",
+  "flagIPO",
+  "bondCommissions",
+  "bondIssueDate",
+  "bondIssuePrice",
+  "bondCoverPrice",
+  "bondAccruedInterestRate",
+  "bondAccrualAdjusting",
+  "bondTaxes",
+  "bondParValue",
+  "bondAccrualTypeCalculation",
+  "preferredVenue",
+  "altVenueSystem",
+  "altBondVenues",
+  "altPreferredVenue",
+  "kidIt",
+  "kidEn",
+  "esgTaxonomy",
+  "esgSustainability",
+  "esgPai",
+  "topQuality",
+  "categoryId",
+];
+
+const relatedInstrumentFields = [
+  "instrId",
+  "venueSystem",
+  "description",
+  "symbol",
+  "titolo",
+  "underlyingInstrId",
+  "underlyingVenueSystem",
+  "underlyingType",
+  "subVenueSystem",
+  "instrTyp",
+  "currencyCd",
+  "multiplicativeFactor",
+  "logoId",
+  "newType",
+];
 
 export type OutputFormat =
   | "json"
@@ -27,9 +148,11 @@ export type OutputFormat =
 
 type CliArgs =
   | {
-      kind: "empty";
+      kind: "env";
       format: OutputFormat | undefined;
       outPath: string | undefined;
+      command: CliCommand;
+      query: string | undefined;
     }
   | {
       kind: "help";
@@ -40,21 +163,38 @@ type CliArgs =
       password: string;
       format: OutputFormat | undefined;
       outPath: string | undefined;
+      command: CliCommand;
+      query: string | undefined;
     }
   | {
       kind: "onePassword";
       itemName: string;
       format: OutputFormat | undefined;
       outPath: string | undefined;
+      command: CliCommand;
+      query: string | undefined;
     };
 
 export type Config = {
   userId: string;
   password: string;
   debug: boolean;
+  command: CliCommand;
+  query: string | undefined;
   output: OutputFormat;
   outPath: string | undefined;
   positionsUrl: string;
+  marketSearchUrl: string;
+  assetDetailsUrl: string;
+  marketIndicesUrl: string;
+  snapshotUrl: string;
+  instrumentSnapshotUrl: string;
+  chartDataUrl: string;
+  linkedIndicesUrl: string;
+  economicEventsUrl: string;
+  similarInstrumentsUrl: string;
+  newsUrl: string;
+  instrumentListUrl: string;
   syntheticCookies: boolean;
 };
 
@@ -73,7 +213,11 @@ type OnePasswordItem = {
   }>;
 };
 
-type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; status?: number; authExpired?: boolean };
+
+class UsageError extends Error {}
 
 export type Position = {
   instrId?: string;
@@ -140,8 +284,18 @@ const browserHeaders = {
 
 function usage(): string {
   return `Usage:
-  npm start -- USER PASSWORD [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
-  npm start -- --op-item "Fineco" [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
+  npm start -- portfolio USER PASSWORD [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
+  npm start -- portfolio --op-item "Fineco" [--format json|raw|csv|html|shareable-html|shareable-csv] [--out path]
+  npm start -- search-asset "query" USER PASSWORD [--out path]
+  npm start -- search-asset "query" --op-item "Fineco" [--out path]
+  npm start -- asset-details INSTRUMENT.VENUE --op-item "Fineco" [--out path]
+  npm start -- market-indices --op-item "Fineco" [--out path]
+
+Commands:
+  portfolio             Fetch positions and portfolio summary. This is the default command.
+  search-asset QUERY    Search Fineco markets for an asset by text.
+  asset-details KEY     Fetch static details for an instrument key, like IT0000072170.AFF.
+  market-indices        Fetch the Fineco indices bar data.
 
 Credentials:
   USER PASSWORD          Fineco user id and password.
@@ -149,15 +303,18 @@ Credentials:
   FINECO_USER_ID/PASSWORD and FINECO_OP_ITEM work too.
 
 Output:
-  --format FORMAT        json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
+  --format FORMAT        Portfolio only: json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
   --out PATH             Write output to a file instead of stdout.
 
 Examples:
-  npm start -- 12345678 'secret'
-  npm start -- --op-item Fineco --format html > portfolio-report.html
-  npm start -- --op-item Fineco --format shareable-html > shareable-report.html
-  npm start -- --op-item Fineco --format shareable-csv > shareable-positions.csv
-  npm start -- 12345678 'secret' --format csv --out positions.csv
+  npm start -- portfolio 12345678 'your-password'
+  npm start -- portfolio --op-item Fineco --format html --out portfolio-report.html
+  npm start -- portfolio --op-item Fineco --format shareable-html --out shareable-report.html
+  npm start -- portfolio --op-item Fineco --format shareable-csv --out shareable-positions.csv
+  npm start -- search-asset fineco --op-item Fineco
+  npm start -- search-asset cloudflare 12345678 'your-password' --out search-results.json
+  npm start -- asset-details IT0000072170.AFF --op-item Fineco
+  npm start -- market-indices --op-item Fineco
 `;
 }
 
@@ -166,6 +323,16 @@ function parseArgs(argv: string[]): CliArgs {
   let itemName: string | undefined;
   let format: OutputFormat | undefined;
   let outPath: string | undefined;
+
+  let command: CliCommand = "portfolio";
+  if (
+    argv[0] === "portfolio" ||
+    argv[0] === "search-asset" ||
+    argv[0] === "asset-details" ||
+    argv[0] === "market-indices"
+  ) {
+    command = argv.shift() as CliCommand;
+  }
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -176,7 +343,7 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg === "--op-item") {
       itemName = argv[index + 1];
       if (!itemName || itemName.startsWith("--")) {
-        throw new Error("Expected item name after --op-item.");
+        throw new UsageError("Expected item name after --op-item.");
       }
       index += 1;
       continue;
@@ -184,17 +351,24 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg.startsWith("--op-item=")) {
       itemName = arg.slice("--op-item=".length);
-      if (!itemName) throw new Error("Expected item name after --op-item.");
+      if (!itemName)
+        throw new UsageError("Expected item name after --op-item.");
       continue;
     }
 
     if (arg === "--format") {
+      if (command !== "portfolio") {
+        throw new UsageError("--format is only supported by portfolio.");
+      }
       format = parseOutputFormat(argv[index + 1]);
       index += 1;
       continue;
     }
 
     if (arg.startsWith("--format=")) {
+      if (command !== "portfolio") {
+        throw new UsageError("--format is only supported by portfolio.");
+      }
       format = parseOutputFormat(arg.slice("--format=".length));
       continue;
     }
@@ -202,7 +376,7 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg === "--out") {
       outPath = argv[index + 1];
       if (!outPath || outPath.startsWith("--")) {
-        throw new Error("Expected path after --out.");
+        throw new UsageError("Expected path after --out.");
       }
       index += 1;
       continue;
@@ -210,23 +384,41 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg.startsWith("--out=")) {
       outPath = arg.slice("--out=".length);
-      if (!outPath) throw new Error("Expected path after --out.");
+      if (!outPath) throw new UsageError("Expected path after --out.");
       continue;
     }
 
     if (arg.startsWith("--")) {
-      throw new Error(`Unknown option: ${arg}`);
+      throw new UsageError(`Unknown option: ${arg}`);
     }
 
     positional.push(arg);
   }
 
-  if (itemName && positional.length > 0) {
-    throw new Error("Use either USER PASSWORD or --op-item ITEM, not both.");
+  const query =
+    command === "search-asset" || command === "asset-details"
+      ? positional.shift()
+      : undefined;
+
+  if (command === "search-asset" && !query) {
+    throw new UsageError("Expected search text after search-asset.");
+  }
+  if (command === "asset-details" && !query) {
+    throw new UsageError("Expected instrument key after asset-details.");
   }
 
-  if (itemName) return { kind: "onePassword", itemName, format, outPath };
-  if (positional.length === 0) return { kind: "empty", format, outPath };
+  if (itemName && positional.length > 0) {
+    throw new UsageError(
+      "Use either USER PASSWORD or --op-item ITEM, not both.",
+    );
+  }
+
+  if (itemName) {
+    return { kind: "onePassword", itemName, format, outPath, command, query };
+  }
+  if (positional.length === 0) {
+    return { kind: "env", format, outPath, command, query };
+  }
   if (positional.length === 2) {
     return {
       kind: "credentials",
@@ -234,10 +426,12 @@ function parseArgs(argv: string[]): CliArgs {
       password: positional[1]!,
       format,
       outPath,
+      command,
+      query,
     };
   }
 
-  throw new Error("Expected USER PASSWORD or --op-item ITEM.");
+  throw new UsageError("Expected USER PASSWORD or --op-item ITEM.");
 }
 
 function opFieldValue(
@@ -336,9 +530,28 @@ async function configFromArgsAndEnv(): Promise<Config> {
     userId,
     password,
     debug: process.env.FINECO_DEBUG === "1",
+    command: args.command,
+    query: args.query,
     output: args.format ?? parseOutputFormat(process.env.FINECO_OUTPUT),
     outPath: args.outPath,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
+    marketSearchUrl: process.env.FINECO_MARKET_SEARCH_URL ?? MARKET_SEARCH_URL,
+    assetDetailsUrl: process.env.FINECO_ASSET_DETAILS_URL ?? ASSET_DETAILS_URL,
+    marketIndicesUrl:
+      process.env.FINECO_MARKET_INDICES_URL ?? MARKET_INDICES_URL,
+    snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
+    instrumentSnapshotUrl:
+      process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
+    chartDataUrl: process.env.FINECO_CHART_DATA_URL ?? CHART_DATA_URL,
+    linkedIndicesUrl:
+      process.env.FINECO_LINKED_INDICES_URL ?? LINKED_INDICES_URL,
+    economicEventsUrl:
+      process.env.FINECO_ECONOMIC_EVENTS_URL ?? ECONOMIC_EVENTS_URL,
+    similarInstrumentsUrl:
+      process.env.FINECO_SIMILAR_INSTRUMENTS_URL ?? SIMILAR_INSTRUMENTS_URL,
+    newsUrl: process.env.FINECO_NEWS_URL ?? NEWS_URL,
+    instrumentListUrl:
+      process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
 }
@@ -442,14 +655,26 @@ async function fetchWithCookieJar(
   let currentCookie = cookieHeader;
 
   for (let redirect = 0; redirect <= maxRedirects; redirect += 1) {
-    const response = await fetch(currentUrl, {
-      ...options,
-      redirect: "manual",
-      headers: {
-        ...(options.headers ?? {}),
-        ...(currentCookie ? { Cookie: currentCookie } : {}),
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(currentUrl, {
+        ...options,
+        redirect: "manual",
+        headers: {
+          ...(options.headers ?? {}),
+          ...(currentCookie ? { Cookie: currentCookie } : {}),
+        },
+      });
+    } catch (error) {
+      const cause = (error as Error).cause;
+      const causeText =
+        cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : cause
+            ? String(cause)
+            : (error as Error).message;
+      throw new Error(`Fetch failed for ${currentUrl}: ${causeText}`);
+    }
 
     currentCookie = mergeSetCookiesIntoHeader(
       currentCookie,
@@ -529,6 +754,52 @@ function toRecordCsv(rows: Array<Record<string, string>>): string {
     headers.map(quote).join(","),
     ...rows.map((row) => headers.map((header) => quote(row[header])).join(",")),
   ].join("\n");
+}
+
+function firstArrayInPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  const queue = Object.values(payload);
+  for (const value of queue) {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") queue.push(...Object.values(value));
+  }
+  return [];
+}
+
+function renderJsonOutput(payload: unknown): string {
+  return JSON.stringify(payload, null, 2);
+}
+
+function splitInstrumentKey(key: string): {
+  instrId: string;
+  venueSystem: string;
+  key: string;
+} {
+  const [instrId, ...venueParts] = key.split(".");
+  const venueSystem = venueParts.join(".");
+  if (!instrId || !venueSystem) {
+    throw new Error("Instrument key must look like INSTRUMENT.VENUE.");
+  }
+  return { instrId, venueSystem, key: `${instrId}.${venueSystem}` };
+}
+
+function collectInstrumentKeys(payload: unknown): string[] {
+  const keys = new Set<string>();
+  const rows = firstArrayInPayload(payload);
+
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const record = row as Record<string, unknown>;
+    const instrId =
+      typeof record.instrId === "string" ? record.instrId : undefined;
+    const venueSystem =
+      typeof record.venueSystem === "string" ? record.venueSystem : undefined;
+    if (instrId && venueSystem) keys.add(`${instrId}.${venueSystem}`);
+  }
+
+  return [...keys];
 }
 
 function htmlEscape(value: unknown): string {
@@ -940,7 +1211,10 @@ function shareableReportHtml(summary: PositionsSummary): string {
 </html>`;
 }
 
-export function renderOutput(summary: PositionsSummary, format: OutputFormat): string {
+export function renderOutput(
+  summary: PositionsSummary,
+  format: OutputFormat,
+): string {
   const rows = positionsAsRows(summary);
 
   if (format === "raw") {
@@ -1018,6 +1292,9 @@ export async function fetchPositionsSummary(
   if (!positions.response.ok) {
     return {
       ok: false,
+      status: positions.response.status,
+      authExpired:
+        positions.response.status === 401 || positions.response.status === 403,
       error: `Positions summary API failed: HTTP ${positions.response.status} ${body.slice(0, 500)}`,
     };
   }
@@ -1030,6 +1307,241 @@ export async function fetchPositionsSummary(
       error: `Positions summary API returned non-JSON: ${body.slice(0, 500)}`,
     };
   }
+}
+
+async function fetchJsonApi<T>(
+  url: string,
+  cookie: string,
+  debug: (message: string) => void,
+  options: {
+    label: string;
+    method?: "GET" | "POST";
+    referer?: string;
+    body?: unknown;
+  },
+): Promise<ApiResult<T>> {
+  const response = await fetchWithCookieJar(
+    url,
+    {
+      method: options.method ?? "GET",
+      headers: {
+        ...browserHeaders,
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        Origin: "https://finecobank.com",
+        Referer: options.referer ?? PORTFOLIO_URL,
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "X-Account-Index": "0",
+        "X-Dossier-Index": "0",
+      },
+      ...(options.body === undefined
+        ? {}
+        : { body: JSON.stringify(options.body) }),
+    },
+    cookie,
+  );
+
+  const body = await response.response.text();
+  debug(
+    `${options.label}: HTTP ${response.response.status}, url=${response.url}, bytes=${body.length}`,
+  );
+
+  if (!response.response.ok) {
+    return {
+      ok: false,
+      status: response.response.status,
+      authExpired:
+        response.response.status === 401 || response.response.status === 403,
+      error: `${options.label} failed: HTTP ${response.response.status} ${body.slice(0, 500)}`,
+    };
+  }
+
+  try {
+    return { ok: true, data: JSON.parse(body) as T };
+  } catch {
+    return {
+      ok: false,
+      error: `${options.label} returned non-JSON: ${body.slice(0, 500)}`,
+    };
+  }
+}
+
+export async function searchAssets(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  if (!config.query) throw new Error("Missing asset search query.");
+  const url = new URL(config.marketSearchUrl);
+  url.searchParams.set("term", config.query);
+
+  return fetchJsonApi(url.toString(), cookie, debug, {
+    label: "Market search API",
+    referer: "https://finecobank.com/pvt/home",
+  });
+}
+
+export async function fetchAssetDetails(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  if (!config.query) throw new Error("Missing asset details instrument key.");
+  const instrument = splitInstrumentKey(config.query);
+  const referer = `https://finecobank.com/pvt/trading/snapshot/${encodeURIComponent(instrument.key)}`;
+
+  const marketSnapshotUrl = `${config.snapshotUrl}/${encodeURIComponent(instrument.venueSystem)}/${encodeURIComponent(instrument.instrId)}`;
+  const instrumentSnapshotUrl = new URL(config.instrumentSnapshotUrl);
+  instrumentSnapshotUrl.searchParams.set("instruments", instrument.key);
+
+  const chartUrl = new URL(config.chartDataUrl);
+  chartUrl.searchParams.set("instrId", instrument.instrId);
+  chartUrl.searchParams.set("venueSystem", instrument.venueSystem);
+  chartUrl.searchParams.set("period", "LAST");
+  chartUrl.searchParams.set("freq", "5m");
+  chartUrl.searchParams.set("output", "all");
+  chartUrl.searchParams.set("useStartTime", "true");
+
+  const linkedIndicesUrl = `${config.linkedIndicesUrl}/${encodeURIComponent(instrument.key)}/linked-instrument/all`;
+
+  const eventsUrl = new URL(config.economicEventsUrl);
+  eventsUrl.searchParams.set("instruments", instrument.key);
+
+  const similarUrl = new URL(config.similarInstrumentsUrl);
+  similarUrl.searchParams.set("instrId", instrument.instrId);
+  similarUrl.searchParams.set("venueSystem", instrument.venueSystem);
+
+  const newsUrl = new URL(config.newsUrl);
+  newsUrl.searchParams.set("symbol", instrument.instrId);
+  newsUrl.searchParams.set("limit", "4");
+
+  const [
+    staticDetails,
+    marketSnapshot,
+    instrumentSnapshot,
+    chart,
+    linkedIndices,
+    events,
+    similar,
+    news,
+  ] = await Promise.all([
+    fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+      label: "Asset details API",
+      method: "POST",
+      referer,
+      body: {
+        instruments: [instrument.key],
+        fields: assetDetailFields,
+        withWarnings: true,
+      },
+    }),
+    fetchJsonApi(marketSnapshotUrl, cookie, debug, {
+      label: "Market snapshot API",
+      referer,
+    }),
+    fetchJsonApi(instrumentSnapshotUrl.toString(), cookie, debug, {
+      label: "Instrument snapshot API",
+      referer,
+    }),
+    fetchJsonApi(chartUrl.toString(), cookie, debug, {
+      label: "Chart API",
+      referer,
+    }),
+    fetchJsonApi(linkedIndicesUrl, cookie, debug, {
+      label: "Linked indices API",
+      referer,
+    }),
+    fetchJsonApi(eventsUrl.toString(), cookie, debug, {
+      label: "Economic events API",
+      referer,
+    }),
+    fetchJsonApi(similarUrl.toString(), cookie, debug, {
+      label: "Similar instruments API",
+      referer,
+    }),
+    fetchJsonApi(newsUrl.toString(), cookie, debug, {
+      label: "News API",
+      referer,
+    }),
+  ]);
+  if (!staticDetails.ok) return staticDetails;
+
+  const relatedKeys = [
+    ...new Set([
+      ...collectInstrumentKeys(similar.ok ? similar.data : undefined),
+      ...collectInstrumentKeys(
+        linkedIndices.ok ? linkedIndices.data : undefined,
+      ),
+    ]),
+  ].filter((key) => key !== instrument.key);
+
+  const [relatedList, relatedStatic] =
+    relatedKeys.length > 0
+      ? await Promise.all([
+          fetchJsonApi(config.instrumentListUrl, cookie, debug, {
+            label: "Related instrument list API",
+            method: "POST",
+            referer,
+            body: { instruments: relatedKeys },
+          }),
+          fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+            label: "Related static instruments API",
+            method: "POST",
+            referer,
+            body: {
+              instruments: relatedKeys,
+              fields: relatedInstrumentFields,
+              withWarnings: true,
+            },
+          }),
+        ])
+      : [undefined, undefined];
+
+  return {
+    ok: true,
+    data: {
+      instrument,
+      static: staticDetails.data,
+      marketSnapshot: marketSnapshot.ok ? marketSnapshot.data : null,
+      instrumentSnapshot: instrumentSnapshot.ok
+        ? instrumentSnapshot.data
+        : null,
+      chart: chart.ok ? chart.data : null,
+      linkedIndices: linkedIndices.ok ? linkedIndices.data : null,
+      economicEvents: events.ok ? events.data : null,
+      similarInstruments: similar.ok ? similar.data : null,
+      news: news.ok ? news.data : null,
+      relatedInstruments: {
+        keys: relatedKeys,
+        list: relatedList?.ok ? relatedList.data : null,
+        static: relatedStatic?.ok ? relatedStatic.data : null,
+      },
+      warnings: [
+        marketSnapshot.ok ? undefined : marketSnapshot.error,
+        instrumentSnapshot.ok ? undefined : instrumentSnapshot.error,
+        chart.ok ? undefined : chart.error,
+        linkedIndices.ok ? undefined : linkedIndices.error,
+        events.ok ? undefined : events.error,
+        similar.ok ? undefined : similar.error,
+        news.ok ? undefined : news.error,
+        relatedList?.ok === false ? relatedList.error : undefined,
+        relatedStatic?.ok === false ? relatedStatic.error : undefined,
+      ].filter((warning): warning is string => Boolean(warning)),
+    },
+  };
+}
+
+export async function fetchMarketIndices(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  return fetchJsonApi(config.marketIndicesUrl, cookie, debug, {
+    label: "Market indices API",
+    referer: "https://finecobank.com/pvt/trading/home",
+  });
 }
 
 export async function logout(
@@ -1073,18 +1585,29 @@ export async function login(
     `Env present: userId length=${config.userId.length}, password length=${config.password.length}`,
   );
 
-  const home = await fetchWithCookieJar(HOME_URL, {
-    headers: {
-      ...browserHeaders,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-  });
+  let home: CookieFetchResult | undefined;
+  try {
+    home = await fetchWithCookieJar(HOME_URL, {
+      headers: {
+        ...browserHeaders,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+  } catch (error) {
+    if (!config.syntheticCookies) throw error;
+    debug(
+      `Preflight failed, using synthetic cookies: ${(error as Error).message}`,
+    );
+  }
   const generatedCookie =
-    config.syntheticCookies && !home.cookie ? syntheticPublicCookies() : "";
-  const loginRequestCookie = mergeCookieHeaders(generatedCookie, home.cookie);
+    config.syntheticCookies && !home?.cookie ? syntheticPublicCookies() : "";
+  const loginRequestCookie = mergeCookieHeaders(generatedCookie, home?.cookie);
 
   debug(
-    `Preflight: HTTP ${home.response.status}, cookies=${cookieNamesFromHeader(home.cookie).join(", ") || "(none)"}`,
+    home
+      ? `Preflight: HTTP ${home.response.status}, cookies=${cookieNamesFromHeader(home.cookie).join(", ") || "(none)"}`
+      : "Preflight: skipped after fetch failure",
   );
   debug(
     `Synthetic cookies: ${cookieNamesFromHeader(generatedCookie).join(", ") || "(none)"}`,
@@ -1146,14 +1669,38 @@ async function main(): Promise<void> {
 
   try {
     authenticatedCookie = await login(config, debug);
-    const summary = await fetchPositionsSummary(
-      config,
-      authenticatedCookie,
-      debug,
-    );
-    if (!summary.ok) throw new Error(summary.error);
-
-    await emitOutput(renderOutput(summary.data, config.output), config.outPath);
+    if (config.command === "portfolio") {
+      const summary = await fetchPositionsSummary(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!summary.ok) throw new Error(summary.error);
+      await emitOutput(
+        renderOutput(summary.data, config.output),
+        config.outPath,
+      );
+    } else if (config.command === "search-asset") {
+      const search = await searchAssets(config, authenticatedCookie, debug);
+      if (!search.ok) throw new Error(search.error);
+      await emitOutput(renderJsonOutput(search.data), config.outPath);
+    } else if (config.command === "asset-details") {
+      const details = await fetchAssetDetails(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!details.ok) throw new Error(details.error);
+      await emitOutput(renderJsonOutput(details.data), config.outPath);
+    } else {
+      const indices = await fetchMarketIndices(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!indices.ok) throw new Error(indices.error);
+      await emitOutput(renderJsonOutput(indices.data), config.outPath);
+    }
     if (config.outPath) debug(`Output saved to ${config.outPath}`);
   } finally {
     await logout(authenticatedCookie, debug);
@@ -1163,8 +1710,10 @@ async function main(): Promise<void> {
 const __filename = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename)) {
   main().catch((error: unknown) => {
-    console.error(`${(error as Error).message}\n`);
-    console.error(usage());
+    console.error((error as Error).message);
+    if (error instanceof UsageError) {
+      console.error(`\n${usage()}`);
+    }
     process.exit(1);
   });
 }
