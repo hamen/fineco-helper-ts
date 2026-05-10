@@ -105,9 +105,7 @@ describe("toCsv", () => {
   });
 
   it("quotes values that contain commas", () => {
-    const rows: Position[] = [
-      { description: "Hello, World", symbol: "TEST" },
-    ];
+    const rows: Position[] = [{ description: "Hello, World", symbol: "TEST" }];
     const csv = toCsv(rows);
     assert.ok(csv.includes('"Hello, World"'));
   });

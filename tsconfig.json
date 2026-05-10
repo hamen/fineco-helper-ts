@@ -11,5 +11,11 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["fineco-portfolio.ts", "mcp-server.ts", "tests/*.test.ts"]
+  "include": [
+    "fineco-portfolio.ts",
+    "fineco-mcp.ts",
+    "mcp-server.ts",
+    "mcp-http-server.ts",
+    "tests/*.test.ts"
+  ]
 }

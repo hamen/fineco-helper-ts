@@ -78,7 +78,23 @@ The MCP server exposes the same read-only flows:
 - `get_asset_details`
 - `get_market_indices`
 
+Run it over stdio:
+
+```sh
+npm run mcp
+```
+
+Or run it over Streamable HTTP:
+
+```sh
+npm run mcp:http
+```
+
+The HTTP transport listens on `http://127.0.0.1:3333/mcp` by default. You can change it with `FINECO_MCP_HOST`, `FINECO_MCP_PORT`, and `FINECO_MCP_PATH`.
+
 The MCP server is a long-lived process and keeps Fineco authentication in memory only. It does not write cookies or session data to disk. Tool calls reuse the in-memory session until it reaches the configured age or idle timeout, then the next call logs in again automatically.
+
+Keep the HTTP transport bound to localhost unless you put a real access layer in front of it, such as a reverse proxy with authentication or a private tunnel. The server does not add its own HTTP authentication.
 
 If Fineco returns an authentication failure while a tool is running, the MCP server clears the in-memory session and returns an error asking the model to retry the same tool call. The retry creates a fresh session.
 
@@ -171,6 +187,9 @@ FINECO_OP_USER_FIELD     1Password user id field. Default: username.
 FINECO_OP_PASSWORD_FIELD 1Password password field. Default: password.
 FINECO_OUTPUT            json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
 FINECO_DEBUG             Set to 1 for secret-safe request diagnostics.
+FINECO_MCP_HOST          Streamable HTTP MCP host. Default: 127.0.0.1.
+FINECO_MCP_PORT          Streamable HTTP MCP port. Default: 3333.
+FINECO_MCP_PATH          Streamable HTTP MCP path. Default: /mcp.
 FINECO_POSITIONS_URL     Override Fineco positions endpoint.
 FINECO_MARKET_SEARCH_URL Override Fineco market search endpoint.
 FINECO_ASSET_DETAILS_URL Override Fineco asset details endpoint.

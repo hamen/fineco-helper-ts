@@ -3,9 +3,7 @@ import { strict as assert } from "node:assert";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-function spawnServer(
-  env?: Record<string, string>,
-): StdioClientTransport {
+function spawnServer(env?: Record<string, string>): StdioClientTransport {
   return new StdioClientTransport({
     command: "npx",
     args: ["tsx", "mcp-server.ts"],
