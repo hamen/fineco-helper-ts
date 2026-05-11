@@ -15,11 +15,14 @@ import {
   SIMILAR_INSTRUMENTS_URL,
   NEWS_URL,
   INSTRUMENT_LIST_URL,
+  TAX_CARRY_FORWARD_URL,
   credentialsFrom1Password,
   fetchAssetDetails,
   fetchMarketIndices,
   fetchPositionsSummary,
+  fetchTaxCarryForward,
   fetchZeroCommissionEtfs,
+  isIsoDate,
   login,
   logout,
   makeLogger,
@@ -33,10 +36,14 @@ import {
 const SESSION_MAX_AGE_MS = 10 * 60_000;
 const SESSION_MAX_IDLE_MS = 5 * 60_000;
 
-async function buildConfig(overrides?: {
+type ConfigOverrides = {
   outPath?: string;
   query?: string | undefined;
-}): Promise<Config> {
+  dateFrom?: string | undefined;
+  dateTo?: string | undefined;
+};
+
+async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
   let userId = process.env.FINECO_USER_ID;
   let password = process.env.FINECO_PASSWORD;
 
@@ -58,6 +65,8 @@ async function buildConfig(overrides?: {
     debug: process.env.FINECO_DEBUG === "1",
     command: "portfolio",
     query: overrides?.query,
+    dateFrom: overrides?.dateFrom,
+    dateTo: overrides?.dateTo,
     output: "json",
     outPath: overrides?.outPath ?? undefined,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
@@ -65,6 +74,8 @@ async function buildConfig(overrides?: {
     assetDetailsUrl: process.env.FINECO_ASSET_DETAILS_URL ?? ASSET_DETAILS_URL,
     marketIndicesUrl:
       process.env.FINECO_MARKET_INDICES_URL ?? MARKET_INDICES_URL,
+    taxCarryForwardUrl:
+      process.env.FINECO_TAX_CARRY_FORWARD_URL ?? TAX_CARRY_FORWARD_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -188,14 +199,14 @@ function authExpiredContent(error: string) {
 }
 
 async function runJsonTool(
-  query: string | undefined,
+  overrides: ConfigOverrides | undefined,
   fetcher: (
     config: Config,
     cookie: string,
     debug: (message: string) => void,
   ) => Promise<ApiResult<unknown>>,
 ) {
-  const config = await buildConfig({ query });
+  const config = await buildConfig(overrides);
   const debug = makeLogger(config);
   try {
     const cookie = await getSessionCookie(config, debug);
@@ -214,6 +225,17 @@ async function runJsonTool(
   } catch (error) {
     return errorContent((error as Error).message);
   }
+}
+
+async function runTaxCarryForwardTool(dateFrom: string, dateTo: string) {
+  if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
+    return errorContent("Dates must use YYYY-MM-DD format.");
+  }
+  if (dateFrom > dateTo) {
+    return errorContent("date_from must be on or before date_to.");
+  }
+
+  return runJsonTool({ dateFrom, dateTo }, fetchTaxCarryForward);
 }
 
 export function createFinecoMcpServer(): McpServer {
@@ -347,7 +369,7 @@ export function createFinecoMcpServer(): McpServer {
         .min(1)
         .describe("Search text, such as fineco or cloudflare."),
     },
-    async ({ query }) => runJsonTool(query, searchAssets),
+    async ({ query }) => runJsonTool({ query }, searchAssets),
   );
 
   server.tool(
@@ -361,7 +383,8 @@ export function createFinecoMcpServer(): McpServer {
           "Instrument key in INSTRUMENT.VENUE form, such as IT0000072170.AFF.",
         ),
     },
-    async ({ instrument }) => runJsonTool(instrument, fetchAssetDetails),
+    async ({ instrument }) =>
+      runJsonTool({ query: instrument }, fetchAssetDetails),
   );
 
   server.tool(
@@ -369,6 +392,23 @@ export function createFinecoMcpServer(): McpServer {
     "Fetch Fineco indices bar data. Returns Fineco JSON only.",
     {},
     async () => runJsonTool(undefined, fetchMarketIndices),
+  );
+
+  server.tool(
+    "get_tax_carry_forward",
+    "Fetch Fineco tax carry-forward data for an explicit date range. Returns Fineco JSON only and may include private tax/accounting data.",
+    {
+      date_from: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Start date in YYYY-MM-DD format."),
+      date_to: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("End date in YYYY-MM-DD format."),
+    },
+    async ({ date_from, date_to }) =>
+      runTaxCarryForwardTool(date_from, date_to),
   );
 
   server.tool(

@@ -40,13 +40,16 @@ export const INSTRUMENT_LIST_URL =
   "https://private-api.finecobank.com/v1/private/tol/instruments/list/search";
 export const ZERO_COMMISSION_ETFS_URL =
   "https://images.finecobank.com/common-pvt/js/json/etf-zero/etf_piu_scambiati.json";
+export const TAX_CARRY_FORWARD_URL =
+  "https://private-api.finecobank.com/v1/private/tax-carry-forward/search";
 
 type CliCommand =
   | "portfolio"
   | "search-asset"
   | "asset-details"
   | "market-indices"
-  | "zero-commission-etfs";
+  | "zero-commission-etfs"
+  | "tax-carry-forward";
 
 const assetDetailFields = [
   "instrId",
@@ -156,6 +159,8 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      dateFrom: string | undefined;
+      dateTo: string | undefined;
     }
   | {
       kind: "help";
@@ -168,6 +173,8 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      dateFrom: string | undefined;
+      dateTo: string | undefined;
     }
   | {
       kind: "onePassword";
@@ -176,6 +183,8 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      dateFrom: string | undefined;
+      dateTo: string | undefined;
     };
 
 export type Config = {
@@ -184,12 +193,15 @@ export type Config = {
   debug: boolean;
   command: CliCommand;
   query: string | undefined;
+  dateFrom: string | undefined;
+  dateTo: string | undefined;
   output: OutputFormat;
   outPath: string | undefined;
   positionsUrl: string;
   marketSearchUrl: string;
   assetDetailsUrl: string;
   marketIndicesUrl: string;
+  taxCarryForwardUrl: string;
   snapshotUrl: string;
   instrumentSnapshotUrl: string;
   chartDataUrl: string;
@@ -307,6 +319,8 @@ function usage(): string {
   npm start -- search-asset "query" --op-item "Fineco" [--out path]
   npm start -- asset-details INSTRUMENT.VENUE --op-item "Fineco" [--out path]
   npm start -- market-indices --op-item "Fineco" [--out path]
+  npm start -- tax-carry-forward DATE_FROM DATE_TO USER PASSWORD [--out path]
+  npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- zero-commission-etfs [query] [--out path]
 
 Commands:
@@ -314,6 +328,7 @@ Commands:
   search-asset QUERY    Search Fineco markets for an asset by text.
   asset-details KEY     Fetch static details for an instrument key, like IT0000072170.AFF.
   market-indices        Fetch the Fineco indices bar data.
+  tax-carry-forward     Fetch tax carry-forward data for an explicit YYYY-MM-DD date range.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -334,8 +349,16 @@ Examples:
   npm start -- search-asset cloudflare 12345678 'your-password' --out search-results.json
   npm start -- asset-details IT0000072170.AFF --op-item Fineco
   npm start -- market-indices --op-item Fineco
+  npm start -- tax-carry-forward 2026-01-01 2026-01-31 --op-item Fineco
   npm start -- zero-commission-etfs EXUS
 `;
+}
+
+export function isIsoDate(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.toISOString().slice(0, 10) === value;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -350,7 +373,8 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "search-asset" ||
     argv[0] === "asset-details" ||
     argv[0] === "market-indices" ||
-    argv[0] === "zero-commission-etfs"
+    argv[0] === "zero-commission-etfs" ||
+    argv[0] === "tax-carry-forward"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -423,11 +447,37 @@ function parseArgs(argv: string[]): CliArgs {
       ? positional.shift()
       : undefined;
 
+  const dateFrom =
+    command === "tax-carry-forward" ? positional.shift() : undefined;
+  const dateTo =
+    command === "tax-carry-forward" ? positional.shift() : undefined;
+
   if (command === "search-asset" && !query) {
     throw new UsageError("Expected search text after search-asset.");
   }
   if (command === "asset-details" && !query) {
     throw new UsageError("Expected instrument key after asset-details.");
+  }
+  if (command === "tax-carry-forward" && (!dateFrom || !dateTo)) {
+    throw new UsageError(
+      "Expected DATE_FROM and DATE_TO after tax-carry-forward.",
+    );
+  }
+  if (
+    command === "tax-carry-forward" &&
+    (!isIsoDate(dateFrom) || !isIsoDate(dateTo))
+  ) {
+    throw new UsageError("tax-carry-forward dates must use YYYY-MM-DD format.");
+  }
+  if (
+    command === "tax-carry-forward" &&
+    isIsoDate(dateFrom) &&
+    isIsoDate(dateTo) &&
+    dateFrom > dateTo
+  ) {
+    throw new UsageError(
+      "tax-carry-forward DATE_FROM must be on or before DATE_TO.",
+    );
   }
 
   if (command === "zero-commission-etfs" && positional.length > 0) {
@@ -437,7 +487,15 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   if (command === "zero-commission-etfs") {
-    return { kind: "env", format, outPath, command, query };
+    return {
+      kind: "env",
+      format,
+      outPath,
+      command,
+      query,
+      dateFrom,
+      dateTo,
+    };
   }
 
   if (itemName && positional.length > 0) {
@@ -447,10 +505,19 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   if (itemName) {
-    return { kind: "onePassword", itemName, format, outPath, command, query };
+    return {
+      kind: "onePassword",
+      itemName,
+      format,
+      outPath,
+      command,
+      query,
+      dateFrom,
+      dateTo,
+    };
   }
   if (positional.length === 0) {
-    return { kind: "env", format, outPath, command, query };
+    return { kind: "env", format, outPath, command, query, dateFrom, dateTo };
   }
   if (positional.length === 2) {
     return {
@@ -461,6 +528,8 @@ function parseArgs(argv: string[]): CliArgs {
       outPath,
       command,
       query,
+      dateFrom,
+      dateTo,
     };
   }
 
@@ -538,6 +607,8 @@ function buildConfig(
     debug: process.env.FINECO_DEBUG === "1",
     command: args.command,
     query: args.query,
+    dateFrom: args.dateFrom,
+    dateTo: args.dateTo,
     output: args.format ?? parseOutputFormat(process.env.FINECO_OUTPUT),
     outPath: args.outPath,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
@@ -545,6 +616,8 @@ function buildConfig(
     assetDetailsUrl: process.env.FINECO_ASSET_DETAILS_URL ?? ASSET_DETAILS_URL,
     marketIndicesUrl:
       process.env.FINECO_MARKET_INDICES_URL ?? MARKET_INDICES_URL,
+    taxCarryForwardUrl:
+      process.env.FINECO_TAX_CARRY_FORWARD_URL ?? TAX_CARRY_FORWARD_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -1589,6 +1662,26 @@ export async function fetchMarketIndices(
   });
 }
 
+export async function fetchTaxCarryForward(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  if (!config.dateFrom || !config.dateTo) {
+    throw new Error("Missing tax carry-forward date range.");
+  }
+
+  const url = new URL(config.taxCarryForwardUrl);
+  url.searchParams.set("dateFrom", config.dateFrom);
+  url.searchParams.set("dateTo", config.dateTo);
+
+  return fetchJsonApi(url.toString(), cookie, debug, {
+    label: "Tax carry-forward API",
+    referer:
+      "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
+  });
+}
+
 export function filterZeroCommissionEtfs(
   instruments: ZeroCommissionEtf[],
   query: string | undefined,
@@ -1834,7 +1927,7 @@ async function main(): Promise<void> {
       );
       if (!details.ok) throw new Error(details.error);
       await emitOutput(renderJsonOutput(details.data), config.outPath);
-    } else {
+    } else if (config.command === "market-indices") {
       const indices = await fetchMarketIndices(
         config,
         authenticatedCookie,
@@ -1842,6 +1935,17 @@ async function main(): Promise<void> {
       );
       if (!indices.ok) throw new Error(indices.error);
       await emitOutput(renderJsonOutput(indices.data), config.outPath);
+    } else if (config.command === "tax-carry-forward") {
+      const taxCarryForward = await fetchTaxCarryForward(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!taxCarryForward.ok) throw new Error(taxCarryForward.error);
+      await emitOutput(renderJsonOutput(taxCarryForward.data), config.outPath);
+    } else {
+      const exhaustiveCheck: never = config.command;
+      throw new Error(`Unsupported command: ${exhaustiveCheck}`);
     }
     if (config.outPath) debug(`Output saved to ${config.outPath}`);
   } finally {

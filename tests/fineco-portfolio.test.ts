@@ -8,6 +8,9 @@ import {
   toCsv,
   reportHtml,
   filterZeroCommissionEtfs,
+  fetchTaxCarryForward,
+  isIsoDate,
+  type Config,
   type Position,
   type PositionsSummary,
   type ZeroCommissionEtf,
@@ -245,5 +248,70 @@ describe("zero-commission-etfs CLI", () => {
     );
     const parsed = JSON.parse(stdout) as { count: number };
     assert.equal(parsed.count, 1);
+  });
+});
+
+describe("fetchTaxCarryForward", () => {
+  it("uses the explicit date range as query parameters", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(JSON.stringify({ total: 0, list: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const config: Config = {
+      userId: "test",
+      password: "test",
+      debug: false,
+      command: "tax-carry-forward",
+      query: undefined,
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      output: "json",
+      outPath: undefined,
+      positionsUrl: "https://example.test/positions",
+      marketSearchUrl: "https://example.test/search",
+      assetDetailsUrl: "https://example.test/details",
+      marketIndicesUrl: "https://example.test/indices",
+      taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+      snapshotUrl: "https://example.test/snapshot",
+      instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
+      chartDataUrl: "https://example.test/chart",
+      linkedIndicesUrl: "https://example.test/linked-indices",
+      economicEventsUrl: "https://example.test/events",
+      similarInstrumentsUrl: "https://example.test/similar",
+      newsUrl: "https://example.test/news",
+      instrumentListUrl: "https://example.test/instrument-list",
+      syntheticCookies: true,
+    };
+
+    try {
+      const result = await fetchTaxCarryForward(config, "session=test", () => {
+        // Test logger intentionally silent.
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(requestedUrls.length, 1);
+      const url = new URL(requestedUrls[0]!);
+      assert.equal(url.searchParams.get("dateFrom"), "2026-01-01");
+      assert.equal(url.searchParams.get("dateTo"), "2026-01-31");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("isIsoDate", () => {
+  it("rejects malformed and impossible dates without throwing", () => {
+    assert.equal(isIsoDate("2026-01-31"), true);
+    assert.equal(isIsoDate("2026-1-31"), false);
+    assert.equal(isIsoDate("2026-00-01"), false);
+    assert.equal(isIsoDate("2026-13-01"), false);
+    assert.equal(isIsoDate("2026-02-30"), false);
   });
 });

@@ -33,10 +33,11 @@ describe("MCP server", () => {
         "get_asset_details",
         "get_market_indices",
         "get_portfolio",
+        "get_tax_carry_forward",
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 8);
+      assert.equal(tools.length, 9);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -77,6 +78,19 @@ describe("MCP server", () => {
       assert.ok(
         JSON.stringify(zeroCommission.inputSchema).includes("query"),
         "get_zero_commission_etfs should have an optional query parameter",
+      );
+
+      const taxCarryForward = tools.find(
+        (t) => t.name === "get_tax_carry_forward",
+      )!;
+      assert.ok(taxCarryForward, "get_tax_carry_forward should be exposed");
+      assert.ok(
+        JSON.stringify(taxCarryForward.inputSchema).includes("date_from"),
+        "get_tax_carry_forward should have a date_from parameter",
+      );
+      assert.ok(
+        JSON.stringify(taxCarryForward.inputSchema).includes("date_to"),
+        "get_tax_carry_forward should have a date_to parameter",
       );
     } finally {
       await client.close();

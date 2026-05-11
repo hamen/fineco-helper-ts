@@ -66,6 +66,13 @@ Fetch the indices bar data:
 npm start -- market-indices --op-item "Fineco"
 ```
 
+Fetch tax carry-forward data for an explicit date range:
+
+```sh
+npm start -- tax-carry-forward 2026-01-01 2026-01-31 "your-user-id" "your-password"
+npm start -- tax-carry-forward 2026-01-01 2026-01-31 --op-item "Fineco"
+```
+
 Fetch Fineco's public zero-commission ETF list:
 
 ```sh
@@ -73,7 +80,7 @@ npm start -- zero-commission-etfs
 npm start -- zero-commission-etfs EXUS
 ```
 
-Market commands always output pretty JSON. Use `--out` when you want to write the response to a file. `zero-commission-etfs` uses Fineco's public ETF promo JSON and does not require login credentials.
+Market and tax commands always output pretty JSON. Use `--out` when you want to write the response to a file. `tax-carry-forward` can include private tax/accounting data in the output. `zero-commission-etfs` uses Fineco's public ETF promo JSON and does not require login credentials.
 
 ## MCP Tools
 
@@ -84,6 +91,7 @@ The MCP server exposes the same read-only flows:
 - `search_asset`
 - `get_asset_details`
 - `get_market_indices`
+- `get_tax_carry_forward`
 - `get_zero_commission_etfs`
 
 Run it over stdio:
@@ -202,6 +210,7 @@ FINECO_POSITIONS_URL     Override Fineco positions endpoint.
 FINECO_MARKET_SEARCH_URL Override Fineco market search endpoint.
 FINECO_ASSET_DETAILS_URL Override Fineco asset details endpoint.
 FINECO_MARKET_INDICES_URL Override Fineco market indices endpoint.
+FINECO_TAX_CARRY_FORWARD_URL Override Fineco tax carry-forward endpoint.
 FINECO_ZERO_COMMISSION_ETFS_URL Override Fineco zero-commission ETF list endpoint.
 FINECO_SNAPSHOT_URL Override Fineco market snapshot endpoint.
 FINECO_INSTRUMENT_SNAPSHOT_URL Override Fineco instrument snapshot endpoint.
