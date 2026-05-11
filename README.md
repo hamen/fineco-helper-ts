@@ -80,6 +80,13 @@ npm start -- tax-minus-by-year "your-user-id" "your-password"
 npm start -- tax-minus-by-year --op-item "Fineco"
 ```
 
+Fetch order monitor transactions and available status filters:
+
+```sh
+npm start -- order-monitor --type equity --days 0 --op-item "Fineco"
+npm start -- order-monitor-filters --type equity --op-item "Fineco"
+```
+
 Fetch Fineco's public zero-commission ETF list:
 
 ```sh
@@ -87,7 +94,7 @@ npm start -- zero-commission-etfs
 npm start -- zero-commission-etfs EXUS
 ```
 
-Market and tax commands always output pretty JSON. Use `--out` when you want to write the response to a file. Tax commands can include private tax/accounting data in the output. `zero-commission-etfs` uses Fineco's public ETF promo JSON and does not require login credentials.
+Market, tax, and order monitor commands always output pretty JSON. Use `--out` when you want to write the response to a file. Tax and order monitor commands can include private account, tax, order, or trading data in the output. `zero-commission-etfs` uses Fineco's public ETF promo JSON and does not require login credentials.
 
 ## MCP Tools
 
@@ -98,6 +105,8 @@ The MCP server exposes the same read-only flows:
 - `search_asset`
 - `get_asset_details`
 - `get_market_indices`
+- `get_order_monitor`
+- `get_order_monitor_filters`
 - `get_tax_carry_forward`
 - `get_tax_minus_by_year`
 - `get_zero_commission_etfs`
@@ -218,6 +227,8 @@ FINECO_POSITIONS_URL     Override Fineco positions endpoint.
 FINECO_MARKET_SEARCH_URL Override Fineco market search endpoint.
 FINECO_ASSET_DETAILS_URL Override Fineco asset details endpoint.
 FINECO_MARKET_INDICES_URL Override Fineco market indices endpoint.
+FINECO_ORDER_MONITOR_URL Override Fineco order monitor endpoint.
+FINECO_ORDER_MONITOR_FILTERS_URL Override Fineco order monitor filters endpoint.
 FINECO_TAX_CARRY_FORWARD_URL Override Fineco tax carry-forward endpoint.
 FINECO_TAX_CARRY_FORWARD_MINUS_URL Override Fineco tax minus by year endpoint.
 FINECO_ZERO_COMMISSION_ETFS_URL Override Fineco zero-commission ETF list endpoint.

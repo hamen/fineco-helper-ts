@@ -17,9 +17,13 @@ import {
   INSTRUMENT_LIST_URL,
   TAX_CARRY_FORWARD_URL,
   TAX_CARRY_FORWARD_MINUS_URL,
+  ORDER_MONITOR_URL,
+  ORDER_MONITOR_FILTERS_URL,
   credentialsFrom1Password,
   fetchAssetDetails,
   fetchMarketIndices,
+  fetchOrderMonitor,
+  fetchOrderMonitorFilters,
   fetchPositionsSummary,
   fetchTaxCarryForward,
   fetchTaxMinusByYear,
@@ -43,6 +47,8 @@ type ConfigOverrides = {
   query?: string | undefined;
   dateFrom?: string | undefined;
   dateTo?: string | undefined;
+  orderType?: string | undefined;
+  orderDays?: number | undefined;
 };
 
 async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
@@ -69,6 +75,8 @@ async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
     query: overrides?.query,
     dateFrom: overrides?.dateFrom,
     dateTo: overrides?.dateTo,
+    orderType: overrides?.orderType ?? "equity",
+    orderDays: overrides?.orderDays ?? 0,
     output: "json",
     outPath: overrides?.outPath ?? undefined,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
@@ -81,6 +89,9 @@ async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
     taxCarryForwardMinusUrl:
       process.env.FINECO_TAX_CARRY_FORWARD_MINUS_URL ??
       TAX_CARRY_FORWARD_MINUS_URL,
+    orderMonitorUrl: process.env.FINECO_ORDER_MONITOR_URL ?? ORDER_MONITOR_URL,
+    orderMonitorFiltersUrl:
+      process.env.FINECO_ORDER_MONITOR_FILTERS_URL ?? ORDER_MONITOR_FILTERS_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -421,6 +432,45 @@ export function createFinecoMcpServer(): McpServer {
     "Fetch Fineco tax carry-forward minus residue grouped by tax year. Returns Fineco JSON only and may include private tax/accounting data.",
     {},
     async () => runJsonTool(undefined, fetchTaxMinusByYear),
+  );
+
+  server.tool(
+    "get_order_monitor",
+    "Fetch Fineco order monitor transactions for an instrument type and day window. Returns Fineco JSON only and may include private order/trading data.",
+    {
+      type: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Instrument type. Default: equity."),
+      days: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Number of days to include. Default: 0."),
+    },
+    async ({ type, days }) => {
+      const orderDays = days ?? 0;
+      return runJsonTool(
+        { orderType: type ?? "equity", orderDays },
+        fetchOrderMonitor,
+      );
+    },
+  );
+
+  server.tool(
+    "get_order_monitor_filters",
+    "Fetch available Fineco order monitor status filters for an instrument type. Returns Fineco JSON only.",
+    {
+      type: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Instrument type. Default: equity."),
+    },
+    async ({ type }) =>
+      runJsonTool({ orderType: type ?? "equity" }, fetchOrderMonitorFilters),
   );
 
   server.tool(

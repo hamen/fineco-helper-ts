@@ -8,6 +8,8 @@ import {
   toCsv,
   reportHtml,
   filterZeroCommissionEtfs,
+  fetchOrderMonitor,
+  fetchOrderMonitorFilters,
   fetchTaxCarryForward,
   fetchTaxMinusByYear,
   isIsoDate,
@@ -273,6 +275,8 @@ describe("fetchTaxCarryForward", () => {
       query: undefined,
       dateFrom: "2026-01-01",
       dateTo: "2026-01-31",
+      orderType: "equity",
+      orderDays: 0,
       output: "json",
       outPath: undefined,
       positionsUrl: "https://example.test/positions",
@@ -281,6 +285,8 @@ describe("fetchTaxCarryForward", () => {
       marketIndicesUrl: "https://example.test/indices",
       taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
       taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+      orderMonitorUrl: "https://example.test/transactions",
+      orderMonitorFiltersUrl: "https://example.test/monitor-filters",
       snapshotUrl: "https://example.test/snapshot",
       instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
       chartDataUrl: "https://example.test/chart",
@@ -341,6 +347,8 @@ describe("fetchTaxMinusByYear", () => {
       query: undefined,
       dateFrom: undefined,
       dateTo: undefined,
+      orderType: "equity",
+      orderDays: 0,
       output: "json",
       outPath: undefined,
       positionsUrl: "https://example.test/positions",
@@ -349,6 +357,8 @@ describe("fetchTaxMinusByYear", () => {
       marketIndicesUrl: "https://example.test/indices",
       taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
       taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+      orderMonitorUrl: "https://example.test/transactions",
+      orderMonitorFiltersUrl: "https://example.test/monitor-filters",
       snapshotUrl: "https://example.test/snapshot",
       instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
       chartDataUrl: "https://example.test/chart",
@@ -369,6 +379,126 @@ describe("fetchTaxMinusByYear", () => {
       assert.deepEqual(requestedUrls, [
         "https://example.test/tax-carry-forward/minus",
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("order monitor APIs", () => {
+  it("adds type and days to the transactions endpoint", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(JSON.stringify({ transactions: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const config: Config = {
+      userId: "test",
+      password: "test",
+      debug: false,
+      command: "order-monitor",
+      query: undefined,
+      dateFrom: undefined,
+      dateTo: undefined,
+      orderType: "equity",
+      orderDays: 0,
+      output: "json",
+      outPath: undefined,
+      positionsUrl: "https://example.test/positions",
+      marketSearchUrl: "https://example.test/search",
+      assetDetailsUrl: "https://example.test/details",
+      marketIndicesUrl: "https://example.test/indices",
+      taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+      taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+      orderMonitorUrl: "https://example.test/transactions",
+      orderMonitorFiltersUrl: "https://example.test/monitor-filters",
+      snapshotUrl: "https://example.test/snapshot",
+      instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
+      chartDataUrl: "https://example.test/chart",
+      linkedIndicesUrl: "https://example.test/linked-indices",
+      economicEventsUrl: "https://example.test/events",
+      similarInstrumentsUrl: "https://example.test/similar",
+      newsUrl: "https://example.test/news",
+      instrumentListUrl: "https://example.test/instrument-list",
+      syntheticCookies: true,
+    };
+
+    try {
+      const result = await fetchOrderMonitor(config, "session=test", () => {
+        // Test logger intentionally silent.
+      });
+
+      assert.equal(result.ok, true);
+      const url = new URL(requestedUrls[0]!);
+      assert.equal(url.searchParams.get("type"), "equity");
+      assert.equal(url.searchParams.get("days"), "0");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("adds type to the monitor filters endpoint", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(JSON.stringify({ statuses: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const config: Config = {
+      userId: "test",
+      password: "test",
+      debug: false,
+      command: "order-monitor-filters",
+      query: undefined,
+      dateFrom: undefined,
+      dateTo: undefined,
+      orderType: "equity",
+      orderDays: 0,
+      output: "json",
+      outPath: undefined,
+      positionsUrl: "https://example.test/positions",
+      marketSearchUrl: "https://example.test/search",
+      assetDetailsUrl: "https://example.test/details",
+      marketIndicesUrl: "https://example.test/indices",
+      taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+      taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+      orderMonitorUrl: "https://example.test/transactions",
+      orderMonitorFiltersUrl: "https://example.test/monitor-filters",
+      snapshotUrl: "https://example.test/snapshot",
+      instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
+      chartDataUrl: "https://example.test/chart",
+      linkedIndicesUrl: "https://example.test/linked-indices",
+      economicEventsUrl: "https://example.test/events",
+      similarInstrumentsUrl: "https://example.test/similar",
+      newsUrl: "https://example.test/news",
+      instrumentListUrl: "https://example.test/instrument-list",
+      syntheticCookies: true,
+    };
+
+    try {
+      const result = await fetchOrderMonitorFilters(
+        config,
+        "session=test",
+        () => {
+          // Test logger intentionally silent.
+        },
+      );
+
+      assert.equal(result.ok, true);
+      const url = new URL(requestedUrls[0]!);
+      assert.equal(url.searchParams.get("type"), "equity");
+      assert.equal(url.searchParams.has("days"), false);
     } finally {
       globalThis.fetch = originalFetch;
     }

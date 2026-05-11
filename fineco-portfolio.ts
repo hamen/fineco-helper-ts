@@ -44,6 +44,10 @@ export const TAX_CARRY_FORWARD_URL =
   "https://private-api.finecobank.com/v1/private/tax-carry-forward/search";
 export const TAX_CARRY_FORWARD_MINUS_URL =
   "https://private-api.finecobank.com/v1/private/tax-carry-forward/minus";
+export const ORDER_MONITOR_URL =
+  "https://private-api.finecobank.com/v1/private/tol/transactions";
+export const ORDER_MONITOR_FILTERS_URL =
+  "https://private-api.finecobank.com/v1/private/tol/monitor-filters";
 
 type CliCommand =
   | "portfolio"
@@ -52,7 +56,9 @@ type CliCommand =
   | "market-indices"
   | "zero-commission-etfs"
   | "tax-carry-forward"
-  | "tax-minus-by-year";
+  | "tax-minus-by-year"
+  | "order-monitor"
+  | "order-monitor-filters";
 
 const assetDetailFields = [
   "instrId",
@@ -164,6 +170,8 @@ type CliArgs =
       query: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
+      orderType: string | undefined;
+      orderDays: number | undefined;
     }
   | {
       kind: "help";
@@ -178,6 +186,8 @@ type CliArgs =
       query: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
+      orderType: string | undefined;
+      orderDays: number | undefined;
     }
   | {
       kind: "onePassword";
@@ -188,6 +198,8 @@ type CliArgs =
       query: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
+      orderType: string | undefined;
+      orderDays: number | undefined;
     };
 
 export type Config = {
@@ -198,6 +210,8 @@ export type Config = {
   query: string | undefined;
   dateFrom: string | undefined;
   dateTo: string | undefined;
+  orderType: string;
+  orderDays: number;
   output: OutputFormat;
   outPath: string | undefined;
   positionsUrl: string;
@@ -206,6 +220,8 @@ export type Config = {
   marketIndicesUrl: string;
   taxCarryForwardUrl: string;
   taxCarryForwardMinusUrl: string;
+  orderMonitorUrl: string;
+  orderMonitorFiltersUrl: string;
   snapshotUrl: string;
   instrumentSnapshotUrl: string;
   chartDataUrl: string;
@@ -327,6 +343,8 @@ function usage(): string {
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- tax-minus-by-year USER PASSWORD [--out path]
   npm start -- tax-minus-by-year --op-item "Fineco" [--out path]
+  npm start -- order-monitor [--type equity] [--days 0] --op-item "Fineco" [--out path]
+  npm start -- order-monitor-filters [--type equity] --op-item "Fineco" [--out path]
   npm start -- zero-commission-etfs [query] [--out path]
 
 Commands:
@@ -336,6 +354,8 @@ Commands:
   market-indices        Fetch the Fineco indices bar data.
   tax-carry-forward     Fetch tax carry-forward data for an explicit YYYY-MM-DD date range.
   tax-minus-by-year     Fetch tax carry-forward minus residue grouped by tax year.
+  order-monitor         Fetch order monitor transactions for an instrument type and day window.
+  order-monitor-filters Fetch available order monitor status filters for an instrument type.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -358,6 +378,8 @@ Examples:
   npm start -- market-indices --op-item Fineco
   npm start -- tax-carry-forward 2026-01-01 2026-01-31 --op-item Fineco
   npm start -- tax-minus-by-year --op-item Fineco
+  npm start -- order-monitor --type equity --days 0 --op-item Fineco
+  npm start -- order-monitor-filters --type equity --op-item Fineco
   npm start -- zero-commission-etfs EXUS
 `;
 }
@@ -369,11 +391,23 @@ export function isIsoDate(value: string | undefined): value is string {
   return date.toISOString().slice(0, 10) === value;
 }
 
+function parseNonNegativeInteger(
+  value: string | undefined,
+  label: string,
+): number {
+  if (!value || !/^\d+$/.test(value)) {
+    throw new UsageError(`${label} must be a non-negative integer.`);
+  }
+  return Number(value);
+}
+
 function parseArgs(argv: string[]): CliArgs {
   const positional: string[] = [];
   let itemName: string | undefined;
   let format: OutputFormat | undefined;
   let outPath: string | undefined;
+  let orderType: string | undefined;
+  let orderDays: number | undefined;
 
   let command: CliCommand = "portfolio";
   if (
@@ -383,7 +417,9 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "market-indices" ||
     argv[0] === "zero-commission-etfs" ||
     argv[0] === "tax-carry-forward" ||
-    argv[0] === "tax-minus-by-year"
+    argv[0] === "tax-minus-by-year" ||
+    argv[0] === "order-monitor" ||
+    argv[0] === "order-monitor-filters"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -439,6 +475,51 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg.startsWith("--out=")) {
       outPath = arg.slice("--out=".length);
       if (!outPath) throw new UsageError("Expected path after --out.");
+      continue;
+    }
+
+    if (arg === "--type") {
+      if (command !== "order-monitor" && command !== "order-monitor-filters") {
+        throw new UsageError(
+          "--type is only supported by order monitor commands.",
+        );
+      }
+      orderType = argv[index + 1];
+      if (!orderType || orderType.startsWith("--")) {
+        throw new UsageError("Expected value after --type.");
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--type=")) {
+      if (command !== "order-monitor" && command !== "order-monitor-filters") {
+        throw new UsageError(
+          "--type is only supported by order monitor commands.",
+        );
+      }
+      orderType = arg.slice("--type=".length);
+      if (!orderType) throw new UsageError("Expected value after --type.");
+      continue;
+    }
+
+    if (arg === "--days") {
+      if (command !== "order-monitor") {
+        throw new UsageError("--days is only supported by order-monitor.");
+      }
+      orderDays = parseNonNegativeInteger(argv[index + 1], "--days");
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--days=")) {
+      if (command !== "order-monitor") {
+        throw new UsageError("--days is only supported by order-monitor.");
+      }
+      orderDays = parseNonNegativeInteger(
+        arg.slice("--days=".length),
+        "--days",
+      );
       continue;
     }
 
@@ -504,6 +585,8 @@ function parseArgs(argv: string[]): CliArgs {
       query,
       dateFrom,
       dateTo,
+      orderType,
+      orderDays,
     };
   }
 
@@ -523,10 +606,22 @@ function parseArgs(argv: string[]): CliArgs {
       query,
       dateFrom,
       dateTo,
+      orderType,
+      orderDays,
     };
   }
   if (positional.length === 0) {
-    return { kind: "env", format, outPath, command, query, dateFrom, dateTo };
+    return {
+      kind: "env",
+      format,
+      outPath,
+      command,
+      query,
+      dateFrom,
+      dateTo,
+      orderType,
+      orderDays,
+    };
   }
   if (positional.length === 2) {
     return {
@@ -539,6 +634,8 @@ function parseArgs(argv: string[]): CliArgs {
       query,
       dateFrom,
       dateTo,
+      orderType,
+      orderDays,
     };
   }
 
@@ -618,6 +715,8 @@ function buildConfig(
     query: args.query,
     dateFrom: args.dateFrom,
     dateTo: args.dateTo,
+    orderType: args.orderType ?? "equity",
+    orderDays: args.orderDays ?? 0,
     output: args.format ?? parseOutputFormat(process.env.FINECO_OUTPUT),
     outPath: args.outPath,
     positionsUrl: process.env.FINECO_POSITIONS_URL ?? POSITIONS_SUMMARY_URL,
@@ -630,6 +729,9 @@ function buildConfig(
     taxCarryForwardMinusUrl:
       process.env.FINECO_TAX_CARRY_FORWARD_MINUS_URL ??
       TAX_CARRY_FORWARD_MINUS_URL,
+    orderMonitorUrl: process.env.FINECO_ORDER_MONITOR_URL ?? ORDER_MONITOR_URL,
+    orderMonitorFiltersUrl:
+      process.env.FINECO_ORDER_MONITOR_FILTERS_URL ?? ORDER_MONITOR_FILTERS_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -1706,6 +1808,35 @@ export async function fetchTaxMinusByYear(
   });
 }
 
+export async function fetchOrderMonitor(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  const url = new URL(config.orderMonitorUrl);
+  url.searchParams.set("type", config.orderType);
+  url.searchParams.set("days", String(config.orderDays));
+
+  return fetchJsonApi(url.toString(), cookie, debug, {
+    label: "Order monitor API",
+    referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
+  });
+}
+
+export async function fetchOrderMonitorFilters(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  const url = new URL(config.orderMonitorFiltersUrl);
+  url.searchParams.set("type", config.orderType);
+
+  return fetchJsonApi(url.toString(), cookie, debug, {
+    label: "Order monitor filters API",
+    referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
+  });
+}
+
 export function filterZeroCommissionEtfs(
   instruments: ZeroCommissionEtf[],
   query: string | undefined,
@@ -1975,6 +2106,27 @@ async function main(): Promise<void> {
       );
       if (!taxMinusByYear.ok) throw new Error(taxMinusByYear.error);
       await emitOutput(renderJsonOutput(taxMinusByYear.data), config.outPath);
+    } else if (config.command === "order-monitor") {
+      const orderMonitor = await fetchOrderMonitor(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!orderMonitor.ok) throw new Error(orderMonitor.error);
+      await emitOutput(renderJsonOutput(orderMonitor.data), config.outPath);
+    } else if (config.command === "order-monitor-filters") {
+      const orderMonitorFilters = await fetchOrderMonitorFilters(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!orderMonitorFilters.ok) {
+        throw new Error(orderMonitorFilters.error);
+      }
+      await emitOutput(
+        renderJsonOutput(orderMonitorFilters.data),
+        config.outPath,
+      );
     } else {
       const exhaustiveCheck: never = config.command;
       throw new Error(`Unsupported command: ${exhaustiveCheck}`);

@@ -32,13 +32,15 @@ describe("MCP server", () => {
         "generate_report",
         "get_asset_details",
         "get_market_indices",
+        "get_order_monitor",
+        "get_order_monitor_filters",
         "get_portfolio",
         "get_tax_carry_forward",
         "get_tax_minus_by_year",
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 10);
+      assert.equal(tools.length, 12);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -98,6 +100,21 @@ describe("MCP server", () => {
         (t) => t.name === "get_tax_minus_by_year",
       )!;
       assert.ok(taxMinusByYear, "get_tax_minus_by_year should be exposed");
+
+      const orderMonitor = tools.find((t) => t.name === "get_order_monitor")!;
+      assert.ok(orderMonitor, "get_order_monitor should be exposed");
+      assert.ok(
+        JSON.stringify(orderMonitor.inputSchema).includes("days"),
+        "get_order_monitor should have an optional days parameter",
+      );
+
+      const orderMonitorFilters = tools.find(
+        (t) => t.name === "get_order_monitor_filters",
+      )!;
+      assert.ok(
+        orderMonitorFilters,
+        "get_order_monitor_filters should be exposed",
+      );
     } finally {
       await client.close();
     }

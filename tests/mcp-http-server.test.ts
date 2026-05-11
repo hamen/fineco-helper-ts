@@ -36,6 +36,8 @@ describe("MCP HTTP server", () => {
         "generate_report",
         "get_asset_details",
         "get_market_indices",
+        "get_order_monitor",
+        "get_order_monitor_filters",
         "get_portfolio",
         "get_tax_carry_forward",
         "get_tax_minus_by_year",
