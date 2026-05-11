@@ -9,6 +9,7 @@ import {
   reportHtml,
   filterZeroCommissionEtfs,
   fetchTaxCarryForward,
+  fetchTaxMinusByYear,
   isIsoDate,
   type Config,
   type Position,
@@ -279,6 +280,7 @@ describe("fetchTaxCarryForward", () => {
       assetDetailsUrl: "https://example.test/details",
       marketIndicesUrl: "https://example.test/indices",
       taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+      taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
       snapshotUrl: "https://example.test/snapshot",
       instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
       chartDataUrl: "https://example.test/chart",
@@ -300,6 +302,73 @@ describe("fetchTaxCarryForward", () => {
       const url = new URL(requestedUrls[0]!);
       assert.equal(url.searchParams.get("dateFrom"), "2026-01-01");
       assert.equal(url.searchParams.get("dateTo"), "2026-01-31");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("fetchTaxMinusByYear", () => {
+  it("fetches the minus by year endpoint without query parameters", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          total: 0,
+          list: [
+            {
+              year: 2026,
+              minusResidue: 0,
+              expirationDate: "2030-12-31",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    };
+
+    const config: Config = {
+      userId: "test",
+      password: "test",
+      debug: false,
+      command: "tax-minus-by-year",
+      query: undefined,
+      dateFrom: undefined,
+      dateTo: undefined,
+      output: "json",
+      outPath: undefined,
+      positionsUrl: "https://example.test/positions",
+      marketSearchUrl: "https://example.test/search",
+      assetDetailsUrl: "https://example.test/details",
+      marketIndicesUrl: "https://example.test/indices",
+      taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+      taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+      snapshotUrl: "https://example.test/snapshot",
+      instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
+      chartDataUrl: "https://example.test/chart",
+      linkedIndicesUrl: "https://example.test/linked-indices",
+      economicEventsUrl: "https://example.test/events",
+      similarInstrumentsUrl: "https://example.test/similar",
+      newsUrl: "https://example.test/news",
+      instrumentListUrl: "https://example.test/instrument-list",
+      syntheticCookies: true,
+    };
+
+    try {
+      const result = await fetchTaxMinusByYear(config, "session=test", () => {
+        // Test logger intentionally silent.
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(requestedUrls, [
+        "https://example.test/tax-carry-forward/minus",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

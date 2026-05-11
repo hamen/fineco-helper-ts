@@ -16,11 +16,13 @@ import {
   NEWS_URL,
   INSTRUMENT_LIST_URL,
   TAX_CARRY_FORWARD_URL,
+  TAX_CARRY_FORWARD_MINUS_URL,
   credentialsFrom1Password,
   fetchAssetDetails,
   fetchMarketIndices,
   fetchPositionsSummary,
   fetchTaxCarryForward,
+  fetchTaxMinusByYear,
   fetchZeroCommissionEtfs,
   isIsoDate,
   login,
@@ -76,6 +78,9 @@ async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
       process.env.FINECO_MARKET_INDICES_URL ?? MARKET_INDICES_URL,
     taxCarryForwardUrl:
       process.env.FINECO_TAX_CARRY_FORWARD_URL ?? TAX_CARRY_FORWARD_URL,
+    taxCarryForwardMinusUrl:
+      process.env.FINECO_TAX_CARRY_FORWARD_MINUS_URL ??
+      TAX_CARRY_FORWARD_MINUS_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -409,6 +414,13 @@ export function createFinecoMcpServer(): McpServer {
     },
     async ({ date_from, date_to }) =>
       runTaxCarryForwardTool(date_from, date_to),
+  );
+
+  server.tool(
+    "get_tax_minus_by_year",
+    "Fetch Fineco tax carry-forward minus residue grouped by tax year. Returns Fineco JSON only and may include private tax/accounting data.",
+    {},
+    async () => runJsonTool(undefined, fetchTaxMinusByYear),
   );
 
   server.tool(

@@ -42,6 +42,8 @@ export const ZERO_COMMISSION_ETFS_URL =
   "https://images.finecobank.com/common-pvt/js/json/etf-zero/etf_piu_scambiati.json";
 export const TAX_CARRY_FORWARD_URL =
   "https://private-api.finecobank.com/v1/private/tax-carry-forward/search";
+export const TAX_CARRY_FORWARD_MINUS_URL =
+  "https://private-api.finecobank.com/v1/private/tax-carry-forward/minus";
 
 type CliCommand =
   | "portfolio"
@@ -49,7 +51,8 @@ type CliCommand =
   | "asset-details"
   | "market-indices"
   | "zero-commission-etfs"
-  | "tax-carry-forward";
+  | "tax-carry-forward"
+  | "tax-minus-by-year";
 
 const assetDetailFields = [
   "instrId",
@@ -202,6 +205,7 @@ export type Config = {
   assetDetailsUrl: string;
   marketIndicesUrl: string;
   taxCarryForwardUrl: string;
+  taxCarryForwardMinusUrl: string;
   snapshotUrl: string;
   instrumentSnapshotUrl: string;
   chartDataUrl: string;
@@ -321,6 +325,8 @@ function usage(): string {
   npm start -- market-indices --op-item "Fineco" [--out path]
   npm start -- tax-carry-forward DATE_FROM DATE_TO USER PASSWORD [--out path]
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
+  npm start -- tax-minus-by-year USER PASSWORD [--out path]
+  npm start -- tax-minus-by-year --op-item "Fineco" [--out path]
   npm start -- zero-commission-etfs [query] [--out path]
 
 Commands:
@@ -329,6 +335,7 @@ Commands:
   asset-details KEY     Fetch static details for an instrument key, like IT0000072170.AFF.
   market-indices        Fetch the Fineco indices bar data.
   tax-carry-forward     Fetch tax carry-forward data for an explicit YYYY-MM-DD date range.
+  tax-minus-by-year     Fetch tax carry-forward minus residue grouped by tax year.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -350,6 +357,7 @@ Examples:
   npm start -- asset-details IT0000072170.AFF --op-item Fineco
   npm start -- market-indices --op-item Fineco
   npm start -- tax-carry-forward 2026-01-01 2026-01-31 --op-item Fineco
+  npm start -- tax-minus-by-year --op-item Fineco
   npm start -- zero-commission-etfs EXUS
 `;
 }
@@ -374,7 +382,8 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "asset-details" ||
     argv[0] === "market-indices" ||
     argv[0] === "zero-commission-etfs" ||
-    argv[0] === "tax-carry-forward"
+    argv[0] === "tax-carry-forward" ||
+    argv[0] === "tax-minus-by-year"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -618,6 +627,9 @@ function buildConfig(
       process.env.FINECO_MARKET_INDICES_URL ?? MARKET_INDICES_URL,
     taxCarryForwardUrl:
       process.env.FINECO_TAX_CARRY_FORWARD_URL ?? TAX_CARRY_FORWARD_URL,
+    taxCarryForwardMinusUrl:
+      process.env.FINECO_TAX_CARRY_FORWARD_MINUS_URL ??
+      TAX_CARRY_FORWARD_MINUS_URL,
     snapshotUrl: process.env.FINECO_SNAPSHOT_URL ?? SNAPSHOT_URL,
     instrumentSnapshotUrl:
       process.env.FINECO_INSTRUMENT_SNAPSHOT_URL ?? INSTRUMENT_SNAPSHOT_URL,
@@ -1682,6 +1694,18 @@ export async function fetchTaxCarryForward(
   });
 }
 
+export async function fetchTaxMinusByYear(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<unknown>> {
+  return fetchJsonApi(config.taxCarryForwardMinusUrl, cookie, debug, {
+    label: "Tax minus by year API",
+    referer:
+      "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
+  });
+}
+
 export function filterZeroCommissionEtfs(
   instruments: ZeroCommissionEtf[],
   query: string | undefined,
@@ -1943,6 +1967,14 @@ async function main(): Promise<void> {
       );
       if (!taxCarryForward.ok) throw new Error(taxCarryForward.error);
       await emitOutput(renderJsonOutput(taxCarryForward.data), config.outPath);
+    } else if (config.command === "tax-minus-by-year") {
+      const taxMinusByYear = await fetchTaxMinusByYear(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!taxMinusByYear.ok) throw new Error(taxMinusByYear.error);
+      await emitOutput(renderJsonOutput(taxMinusByYear.data), config.outPath);
     } else {
       const exhaustiveCheck: never = config.command;
       throw new Error(`Unsupported command: ${exhaustiveCheck}`);

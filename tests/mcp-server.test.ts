@@ -34,10 +34,11 @@ describe("MCP server", () => {
         "get_market_indices",
         "get_portfolio",
         "get_tax_carry_forward",
+        "get_tax_minus_by_year",
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 9);
+      assert.equal(tools.length, 10);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -92,6 +93,11 @@ describe("MCP server", () => {
         JSON.stringify(taxCarryForward.inputSchema).includes("date_to"),
         "get_tax_carry_forward should have a date_to parameter",
       );
+
+      const taxMinusByYear = tools.find(
+        (t) => t.name === "get_tax_minus_by_year",
+      )!;
+      assert.ok(taxMinusByYear, "get_tax_minus_by_year should be exposed");
     } finally {
       await client.close();
     }

@@ -38,6 +38,7 @@ describe("MCP HTTP server", () => {
         "get_market_indices",
         "get_portfolio",
         "get_tax_carry_forward",
+        "get_tax_minus_by_year",
         "get_zero_commission_etfs",
         "search_asset",
       ]);
