@@ -33,9 +33,10 @@ describe("MCP server", () => {
         "get_asset_details",
         "get_market_indices",
         "get_portfolio",
+        "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 7);
+      assert.equal(tools.length, 8);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -68,6 +69,15 @@ describe("MCP server", () => {
 
       const logout = tools.find((t) => t.name === "fineco_logout")!;
       assert.ok(logout, "fineco_logout should be exposed");
+
+      const zeroCommission = tools.find(
+        (t) => t.name === "get_zero_commission_etfs",
+      )!;
+      assert.ok(zeroCommission, "get_zero_commission_etfs should be exposed");
+      assert.ok(
+        JSON.stringify(zeroCommission.inputSchema).includes("query"),
+        "get_zero_commission_etfs should have an optional query parameter",
+      );
     } finally {
       await client.close();
     }

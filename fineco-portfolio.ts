@@ -38,12 +38,15 @@ export const NEWS_URL =
   "https://private-api.finecobank.com/v2/private/fns/search/news";
 export const INSTRUMENT_LIST_URL =
   "https://private-api.finecobank.com/v1/private/tol/instruments/list/search";
+export const ZERO_COMMISSION_ETFS_URL =
+  "https://images.finecobank.com/common-pvt/js/json/etf-zero/etf_piu_scambiati.json";
 
 type CliCommand =
   | "portfolio"
   | "search-asset"
   | "asset-details"
-  | "market-indices";
+  | "market-indices"
+  | "zero-commission-etfs";
 
 const assetDetailFields = [
   "instrId",
@@ -261,6 +264,20 @@ export type PortfolioTotals = {
   profitLossPerc?: number;
 };
 
+export type ZeroCommissionEtf = {
+  instrId?: string;
+  venueSystem?: string;
+  description?: string;
+  issuer?: string;
+};
+
+export type ZeroCommissionEtfs = {
+  capturedAt: string;
+  sourceUrl: string;
+  count: number;
+  instruments: ZeroCommissionEtf[];
+};
+
 const browserHeaders = {
   Accept: "application/json",
   "Cache-Control": "no-cache",
@@ -290,12 +307,14 @@ function usage(): string {
   npm start -- search-asset "query" --op-item "Fineco" [--out path]
   npm start -- asset-details INSTRUMENT.VENUE --op-item "Fineco" [--out path]
   npm start -- market-indices --op-item "Fineco" [--out path]
+  npm start -- zero-commission-etfs [query] [--out path]
 
 Commands:
   portfolio             Fetch positions and portfolio summary. This is the default command.
   search-asset QUERY    Search Fineco markets for an asset by text.
   asset-details KEY     Fetch static details for an instrument key, like IT0000072170.AFF.
   market-indices        Fetch the Fineco indices bar data.
+  zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
   USER PASSWORD          Fineco user id and password.
@@ -315,6 +334,7 @@ Examples:
   npm start -- search-asset cloudflare 12345678 'your-password' --out search-results.json
   npm start -- asset-details IT0000072170.AFF --op-item Fineco
   npm start -- market-indices --op-item Fineco
+  npm start -- zero-commission-etfs EXUS
 `;
 }
 
@@ -329,7 +349,8 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "portfolio" ||
     argv[0] === "search-asset" ||
     argv[0] === "asset-details" ||
-    argv[0] === "market-indices"
+    argv[0] === "market-indices" ||
+    argv[0] === "zero-commission-etfs"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -396,7 +417,9 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   const query =
-    command === "search-asset" || command === "asset-details"
+    command === "search-asset" ||
+    command === "asset-details" ||
+    command === "zero-commission-etfs"
       ? positional.shift()
       : undefined;
 
@@ -405,6 +428,16 @@ function parseArgs(argv: string[]): CliArgs {
   }
   if (command === "asset-details" && !query) {
     throw new UsageError("Expected instrument key after asset-details.");
+  }
+
+  if (command === "zero-commission-etfs" && positional.length > 0) {
+    throw new UsageError(
+      "zero-commission-etfs accepts at most one optional query.",
+    );
+  }
+
+  if (command === "zero-commission-etfs") {
+    return { kind: "env", format, outPath, command, query };
   }
 
   if (itemName && positional.length > 0) {
@@ -494,38 +527,11 @@ function parseOutputFormat(value: string | undefined): OutputFormat {
   );
 }
 
-async function configFromArgsAndEnv(): Promise<Config> {
-  const args = parseArgs(process.argv.slice(2));
-
-  if (args.kind === "help") {
-    console.log(usage());
-    process.exit(0);
-  }
-
-  let userId = process.env.FINECO_USER_ID;
-  let password = process.env.FINECO_PASSWORD;
-
-  if (args.kind === "credentials") {
-    userId = args.userId;
-    password = args.password;
-  }
-
-  const opItemName =
-    args.kind === "onePassword" ? args.itemName : process.env.FINECO_OP_ITEM;
-  if ((!userId || !password) && opItemName) {
-    try {
-      ({ userId, password } = await credentialsFrom1Password(opItemName));
-    } catch (error) {
-      throw new Error(
-        `Could not read 1Password item "${opItemName}": ${(error as Error).message}`,
-      );
-    }
-  }
-
-  if (!userId || !password) {
-    throw new Error("Missing Fineco credentials.");
-  }
-
+function buildConfig(
+  args: Exclude<CliArgs, { kind: "help" }>,
+  userId: string,
+  password: string,
+): Config {
   return {
     userId,
     password,
@@ -554,6 +560,45 @@ async function configFromArgsAndEnv(): Promise<Config> {
       process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
+}
+
+async function configFromArgsAndEnv(): Promise<Config> {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.kind === "help") {
+    console.log(usage());
+    process.exit(0);
+  }
+
+  let userId = process.env.FINECO_USER_ID;
+  let password = process.env.FINECO_PASSWORD;
+
+  if (args.kind === "credentials") {
+    userId = args.userId;
+    password = args.password;
+  }
+
+  if (args.command === "zero-commission-etfs") {
+    return buildConfig(args, "", "");
+  }
+
+  const opItemName =
+    args.kind === "onePassword" ? args.itemName : process.env.FINECO_OP_ITEM;
+  if ((!userId || !password) && opItemName) {
+    try {
+      ({ userId, password } = await credentialsFrom1Password(opItemName));
+    } catch (error) {
+      throw new Error(
+        `Could not read 1Password item "${opItemName}": ${(error as Error).message}`,
+      );
+    }
+  }
+
+  if (!userId || !password) {
+    throw new Error("Missing Fineco credentials.");
+  }
+
+  return buildConfig(args, userId, password);
 }
 
 function getSetCookieHeaders(response: Response): string[] {
@@ -1544,6 +1589,89 @@ export async function fetchMarketIndices(
   });
 }
 
+export function filterZeroCommissionEtfs(
+  instruments: ZeroCommissionEtf[],
+  query: string | undefined,
+): ZeroCommissionEtf[] {
+  const needle = query?.trim().toLocaleLowerCase("en");
+  if (!needle) return instruments;
+
+  return instruments.filter((instrument) =>
+    [
+      instrument.instrId,
+      instrument.venueSystem,
+      instrument.description,
+      instrument.issuer,
+    ].some((value) => value?.toLocaleLowerCase("en").includes(needle)),
+  );
+}
+
+export async function fetchZeroCommissionEtfs(
+  options: {
+    url?: string;
+    query?: string;
+    debug?: (message: string) => void;
+  } = {},
+): Promise<ApiResult<ZeroCommissionEtfs>> {
+  const url =
+    options.url ??
+    process.env.FINECO_ZERO_COMMISSION_ETFS_URL ??
+    ZERO_COMMISSION_ETFS_URL;
+  const debug = options.debug ?? (() => {});
+  const response = await fetch(url, {
+    headers: {
+      Accept: "*/*",
+      "Accept-Language": "it,en;q=0.9",
+      "Cache-Control": "no-cache",
+      Origin: "https://finecobank.com",
+      Pragma: "no-cache",
+      Referer: "https://finecobank.com/pvt/trading/stocklist/etf/zero",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-site",
+      "User-Agent": browserHeaders["User-Agent"],
+      "sec-ch-ua": browserHeaders["sec-ch-ua"],
+      "sec-ch-ua-mobile": browserHeaders["sec-ch-ua-mobile"],
+      "sec-ch-ua-platform": browserHeaders["sec-ch-ua-platform"],
+      "sec-gpc": browserHeaders["sec-gpc"],
+    },
+  });
+  const body = await response.text();
+  debug(
+    `Zero-commission ETF list: HTTP ${response.status}, url=${url}, bytes=${body.length}`,
+  );
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: `Zero-commission ETF list failed: HTTP ${response.status} ${body.slice(0, 500)}`,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(body) as { instruments?: ZeroCommissionEtf[] };
+    const instruments = filterZeroCommissionEtfs(
+      parsed.instruments ?? [],
+      options.query,
+    );
+    return {
+      ok: true,
+      data: {
+        capturedAt: new Date().toISOString(),
+        sourceUrl: url,
+        count: instruments.length,
+        instruments,
+      },
+    };
+  } catch {
+    return {
+      ok: false,
+      error: `Zero-commission ETF list returned non-JSON: ${body.slice(0, 500)}`,
+    };
+  }
+}
+
 export async function logout(
   cookie: string,
   debug: (message: string) => void,
@@ -1668,6 +1796,20 @@ async function main(): Promise<void> {
   const debug = makeLogger(config);
 
   try {
+    if (config.command === "zero-commission-etfs") {
+      const zeroCommissionEtfs = await fetchZeroCommissionEtfs({
+        debug,
+        ...(config.query === undefined ? {} : { query: config.query }),
+      });
+      if (!zeroCommissionEtfs.ok) throw new Error(zeroCommissionEtfs.error);
+      await emitOutput(
+        renderJsonOutput(zeroCommissionEtfs.data),
+        config.outPath,
+      );
+      if (config.outPath) debug(`Output saved to ${config.outPath}`);
+      return;
+    }
+
     authenticatedCookie = await login(config, debug);
     if (config.command === "portfolio") {
       const summary = await fetchPositionsSummary(

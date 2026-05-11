@@ -19,6 +19,7 @@ import {
   fetchAssetDetails,
   fetchMarketIndices,
   fetchPositionsSummary,
+  fetchZeroCommissionEtfs,
   login,
   logout,
   makeLogger,
@@ -368,6 +369,30 @@ export function createFinecoMcpServer(): McpServer {
     "Fetch Fineco indices bar data. Returns Fineco JSON only.",
     {},
     async () => runJsonTool(undefined, fetchMarketIndices),
+  );
+
+  server.tool(
+    "get_zero_commission_etfs",
+    "Fetch Fineco's public zero-commission ETF list. Does not require a Fineco login. Optional query filters by ISIN, venue, issuer, or description.",
+    {
+      query: z
+        .string()
+        .optional()
+        .describe(
+          "Optional filter text, such as EXUS, IE0006WW1TQ4, or issuer.",
+        ),
+    },
+    async ({ query }) => {
+      try {
+        const result = await fetchZeroCommissionEtfs(
+          query === undefined ? {} : { query },
+        );
+        if (!result.ok) return errorContent(result.error);
+        return jsonContent(result.data);
+      } catch (error) {
+        return errorContent((error as Error).message);
+      }
+    },
   );
 
   return server;

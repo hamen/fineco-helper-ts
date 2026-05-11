@@ -1,13 +1,19 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import {
   positionsAsRows,
   toCsv,
   reportHtml,
+  filterZeroCommissionEtfs,
   type Position,
   type PositionsSummary,
+  type ZeroCommissionEtf,
 } from "../fineco-portfolio.js";
+
+const execFileAsync = promisify(execFile);
 
 const samplePositions: Position[] = [
   {
@@ -171,5 +177,73 @@ describe("reportHtml", () => {
     const html = reportHtml(sampleSummary);
     // All positions have positive P/L, so "positive" class should appear
     assert.ok(html.includes('class="num positive"'));
+  });
+});
+
+describe("filterZeroCommissionEtfs", () => {
+  const instruments: ZeroCommissionEtf[] = [
+    {
+      instrId: "IE0006WW1TQ4",
+      venueSystem: "AFF",
+      description: "Xtrackers MSCI World ex USA UCITS ETF 1C",
+      issuer: "Xtrackers",
+    },
+    {
+      instrId: "IE00B4L5Y983",
+      venueSystem: "AFF",
+      description: "iShares Core MSCI World UCITS ETF USD (Acc)",
+      issuer: "BLACKROCK",
+    },
+  ];
+
+  it("returns all instruments without a query", () => {
+    assert.deepEqual(
+      filterZeroCommissionEtfs(instruments, undefined),
+      instruments,
+    );
+  });
+
+  it("filters by ISIN, issuer, venue, or description", () => {
+    assert.deepEqual(filterZeroCommissionEtfs(instruments, "IE0006WW1TQ4"), [
+      instruments[0],
+    ]);
+    assert.deepEqual(filterZeroCommissionEtfs(instruments, "blackrock"), [
+      instruments[1],
+    ]);
+    assert.deepEqual(filterZeroCommissionEtfs(instruments, "ex usa"), [
+      instruments[0],
+    ]);
+    assert.equal(filterZeroCommissionEtfs(instruments, "AFF").length, 2);
+  });
+});
+
+describe("zero-commission-etfs CLI", () => {
+  it("does not read 1Password when FINECO_OP_ITEM is set", async () => {
+    const source = encodeURIComponent(
+      JSON.stringify({
+        instruments: [
+          {
+            instrId: "IE00B4L5Y983",
+            venueSystem: "AFF",
+            description: "iShares Core MSCI World UCITS ETF USD (Acc)",
+            issuer: "BLACKROCK",
+          },
+        ],
+      }),
+    );
+    const { stdout } = await execFileAsync(
+      "npx",
+      ["tsx", "fineco-portfolio.ts", "zero-commission-etfs", "blackrock"],
+      {
+        cwd: new URL("..", import.meta.url).pathname,
+        env: {
+          PATH: process.env.PATH ?? "",
+          FINECO_OP_ITEM: "Missing Item That Must Not Be Read",
+          FINECO_ZERO_COMMISSION_ETFS_URL: `data:application/json,${source}`,
+        },
+      },
+    );
+    const parsed = JSON.parse(stdout) as { count: number };
+    assert.equal(parsed.count, 1);
   });
 });
