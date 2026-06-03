@@ -31,6 +31,7 @@ describe("MCP server", () => {
         "fineco_session_status",
         "generate_report",
         "get_asset_details",
+        "get_enrichment",
         "get_market_indices",
         "get_order_monitor",
         "get_order_monitor_filters",
@@ -40,7 +41,7 @@ describe("MCP server", () => {
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 12);
+      assert.equal(tools.length, 13);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -81,6 +82,18 @@ describe("MCP server", () => {
       assert.ok(
         JSON.stringify(zeroCommission.inputSchema).includes("query"),
         "get_zero_commission_etfs should have an optional query parameter",
+      );
+
+      const enrichment = tools.find((t) => t.name === "get_enrichment")!;
+      assert.ok(enrichment, "get_enrichment should be exposed");
+      assert.ok(
+        JSON.stringify(enrichment.inputSchema).includes("fineco_title"),
+        "get_enrichment should have an optional fineco_title parameter",
+      );
+      assert.equal(
+        JSON.stringify(enrichment.inputSchema).includes("markdown"),
+        false,
+        "get_enrichment should not expose Markdown through MCP",
       );
 
       const taxCarryForward = tools.find(

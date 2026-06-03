@@ -10,7 +10,7 @@
     "start": "npm run build --silent && node dist/fineco-portfolio.js",
     "typecheck": "tsc --noEmit",
     "test": "npx tsx --test tests/*.test.ts",
-    "format": "prettier --write fineco-portfolio.ts fineco-mcp.ts mcp-server.ts mcp-http-server.ts tests/*.test.ts README.md package.json tsconfig.json",
+    "format": "prettier --write enrichment.ts fineco-portfolio.ts fineco-mcp.ts mcp-server.ts mcp-http-server.ts tests/*.test.ts README.md package.json tsconfig.json",
     "mcp": "npm run build --silent && node dist/mcp-server.js",
     "mcp:http": "npm run build --silent && node dist/mcp-http-server.js"
   },

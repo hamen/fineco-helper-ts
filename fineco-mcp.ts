@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 
+import { fetchEnrichmentReport } from "./enrichment.js";
 import {
   ASSET_DETAILS_URL,
   MARKET_INDICES_URL,
@@ -340,7 +341,9 @@ export function createFinecoMcpServer(): McpServer {
           content: [
             {
               type: "text" as const,
-              text: `HTML report saved to ${reportPath} (${rows.length} positions, ${shareable ? "shareable" : "full"}).`,
+              text: `HTML report saved to ${reportPath} (${
+                rows.length
+              } positions, ${shareable ? "shareable" : "full"}).`,
             },
           ],
         };
@@ -491,6 +494,34 @@ export function createFinecoMcpServer(): McpServer {
         );
         if (!result.ok) return errorContent(result.error);
         return jsonContent(result.data);
+      } catch (error) {
+        return errorContent((error as Error).message);
+      }
+    },
+  );
+
+  server.tool(
+    "get_enrichment",
+    "Fetch a structured public stock-analysis enrichment report from an approved source URL. Optionally compare it with a Fineco title and return a match score. Returns JSON only.",
+    {
+      url: z.string().url().describe("Public source URL for the stock page."),
+      fineco_title: z
+        .string()
+        .optional()
+        .describe(
+          "Optional Fineco instrument title to compare with the report.",
+        ),
+    },
+    async ({ url, fineco_title }) => {
+      try {
+        const report = await fetchEnrichmentReport({
+          url,
+          ...(fineco_title === undefined ? {} : { finecoTitle: fineco_title }),
+        });
+        const data = Object.fromEntries(
+          Object.entries(report).filter(([key]) => key !== "markdown"),
+        );
+        return jsonContent(data);
       } catch (error) {
         return errorContent((error as Error).message);
       }

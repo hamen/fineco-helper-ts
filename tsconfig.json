@@ -12,6 +12,7 @@
     "types": ["node"]
   },
   "include": [
+    "enrichment.ts",
     "fineco-portfolio.ts",
     "fineco-mcp.ts",
     "mcp-server.ts",

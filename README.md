@@ -94,6 +94,14 @@ npm start -- zero-commission-etfs
 npm start -- zero-commission-etfs EXUS
 ```
 
+Fetch an approved stock-analysis enrichment report and optionally score it
+against a Fineco title:
+
+```sh
+npm start -- enrichment "https://example.com/stocks/example" "Example Fineco title"
+npm start -- enrichment "https://example.com/stocks/example" "Example Fineco title" --out enrichment.md
+```
+
 Market, tax, and order monitor commands always output pretty JSON. Use `--out` when you want to write the response to a file. Tax and order monitor commands can include private account, tax, order, or trading data in the output. `zero-commission-etfs` uses Fineco's public ETF promo JSON and does not require login credentials.
 
 ## MCP Tools
@@ -105,11 +113,15 @@ The MCP server exposes the same read-only flows:
 - `search_asset`
 - `get_asset_details`
 - `get_market_indices`
+- `get_enrichment`
 - `get_order_monitor`
 - `get_order_monitor_filters`
 - `get_tax_carry_forward`
 - `get_tax_minus_by_year`
 - `get_zero_commission_etfs`
+
+`get_enrichment` returns structured JSON only. Markdown report generation stays
+CLI-only via `npm start -- enrichment ... --out enrichment.md`.
 
 Run it over stdio:
 

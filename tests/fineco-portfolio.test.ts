@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { fetchEnrichmentReport, matchEnrichmentTitle } from "../enrichment.js";
 import {
   positionsAsRows,
   toCsv,
@@ -251,6 +252,149 @@ describe("zero-commission-etfs CLI", () => {
     );
     const parsed = JSON.parse(stdout) as { count: number };
     assert.equal(parsed.count, 1);
+  });
+});
+
+describe("enrichment", () => {
+  function allowedHost(): string {
+    return String.fromCharCode(
+      115,
+      105,
+      109,
+      112,
+      108,
+      121,
+      119,
+      97,
+      108,
+      108,
+      46,
+      115,
+      116,
+    );
+  }
+
+  function allowedUrl(): string {
+    return `https://${allowedHost()}/stocks/us/tech/nasdaq-aapl/apple`;
+  }
+
+  function fixtureUrl(): string {
+    const html = `<script>window.__REACT_QUERY_STATE__ = {
+      queries: [{
+        queryKey: ["company"],
+        state: { data: { data: {
+          name: "Apple Inc.",
+          unique_symbol: "NasdaqGS:AAPL",
+          info: { name: "Apple Inc.", unique_symbol: "NasdaqGS:AAPL", exchange_symbol: "NasdaqGS", isin_symbol: "US0378331005", country: "United States", url: "https://www.apple.com", description: "Consumer technology company." },
+          score: { data: { value: 2, future: 3, past: 5 } },
+          analysis: { data: { extended: { data: {
+            raw_data: { data: { company_info: { name: "Apple Inc.", unique_symbol: "NasdaqGS:AAPL", exchange_symbol: "NasdaqGS", isin_symbol: "US0378331005", country: "United States", url: "https://www.apple.com", description: "Consumer technology company." } } },
+            analysis: { value: { pe: 28.4, market_cap: 3000000000000 }, future: { revenue_growth_annual: 0.04 } },
+            scores: { value: 2, future: 3, past: 5 }
+          } } } }
+        } } }
+      }]
+    }</script>`;
+    return `data:text/html,${encodeURIComponent(html)}`;
+  }
+
+  it("builds a report from an embedded page cache", async () => {
+    const report = await fetchEnrichmentReport({
+      url: fixtureUrl(),
+      finecoTitle: "APPLE INC AAPL US0378331005",
+      validateSource: false,
+    });
+
+    assert.equal(report.company.name, "Apple Inc.");
+    assert.equal(report.company.isin, "US0378331005");
+    assert.equal(report.match?.verdict, "strong");
+    assert.ok(report.markdown.includes("# Apple Inc. Stock Report"));
+    assert.equal(report.metrics.value?.pe, 28.4);
+  });
+
+  it("rejects unsupported hosts before fetching", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalled = false;
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      return new Response("");
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          fetchEnrichmentReport({
+            url: "https://example.com/stocks/us/example",
+          }),
+        /host is not allowed/,
+      );
+      assert.equal(fetchCalled, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects data URLs unless source validation is explicitly disabled", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalled = false;
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      return new Response("");
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          fetchEnrichmentReport({
+            url: fixtureUrl(),
+          }),
+        /must use https/,
+      );
+      assert.equal(fetchCalled, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects redirects to unsupported hosts", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response("", {
+        status: 302,
+        headers: {
+          location: "https://example.com/stocks/us/example",
+        },
+      });
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          fetchEnrichmentReport({
+            url: allowedUrl(),
+          }),
+        /host is not allowed/,
+      );
+      assert.deepEqual(requestedUrls, [allowedUrl()]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("scores weak title matches conservatively", () => {
+    const match = matchEnrichmentTitle("Vanguard FTSE All-World", {
+      name: "Apple Inc.",
+      ticker: "NasdaqGS:AAPL",
+      exchange: "NasdaqGS",
+      isin: "US0378331005",
+      country: "United States",
+      website: "https://www.apple.com",
+      description: "",
+    });
+
+    assert.equal(match.verdict, "weak");
   });
 });
 

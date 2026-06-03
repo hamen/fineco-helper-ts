@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { fetchEnrichmentReport } from "./enrichment.js";
+
 const execFileAsync = promisify(execFile);
 
 const LOGIN_URL =
@@ -53,6 +55,7 @@ type CliCommand =
   | "portfolio"
   | "search-asset"
   | "asset-details"
+  | "enrichment"
   | "market-indices"
   | "zero-commission-etfs"
   | "tax-carry-forward"
@@ -168,6 +171,7 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      enrichmentTitle: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
       orderType: string | undefined;
@@ -184,6 +188,7 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      enrichmentTitle: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
       orderType: string | undefined;
@@ -196,6 +201,7 @@ type CliArgs =
       outPath: string | undefined;
       command: CliCommand;
       query: string | undefined;
+      enrichmentTitle: string | undefined;
       dateFrom: string | undefined;
       dateTo: string | undefined;
       orderType: string | undefined;
@@ -208,6 +214,7 @@ export type Config = {
   debug: boolean;
   command: CliCommand;
   query: string | undefined;
+  enrichmentTitle?: string | undefined;
   dateFrom: string | undefined;
   dateTo: string | undefined;
   orderType: string;
@@ -338,6 +345,7 @@ function usage(): string {
   npm start -- search-asset "query" USER PASSWORD [--out path]
   npm start -- search-asset "query" --op-item "Fineco" [--out path]
   npm start -- asset-details INSTRUMENT.VENUE --op-item "Fineco" [--out path]
+  npm start -- enrichment SOURCE_URL ["Fineco title"] [--out report.md]
   npm start -- market-indices --op-item "Fineco" [--out path]
   npm start -- tax-carry-forward DATE_FROM DATE_TO USER PASSWORD [--out path]
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
@@ -351,6 +359,7 @@ Commands:
   portfolio             Fetch positions and portfolio summary. This is the default command.
   search-asset QUERY    Search Fineco markets for an asset by text.
   asset-details KEY     Fetch static details for an instrument key, like IT0000072170.AFF.
+  enrichment URL        Fetch a public stock-analysis enrichment report. Optional Fineco title adds a match score.
   market-indices        Fetch the Fineco indices bar data.
   tax-carry-forward     Fetch tax carry-forward data for an explicit YYYY-MM-DD date range.
   tax-minus-by-year     Fetch tax carry-forward minus residue grouped by tax year.
@@ -375,6 +384,7 @@ Examples:
   npm start -- search-asset fineco --op-item Fineco
   npm start -- search-asset cloudflare 12345678 'your-password' --out search-results.json
   npm start -- asset-details IT0000072170.AFF --op-item Fineco
+  npm start -- enrichment "https://example.com/stocks/example" "Example Fineco title" --out enrichment.md
   npm start -- market-indices --op-item Fineco
   npm start -- tax-carry-forward 2026-01-01 2026-01-31 --op-item Fineco
   npm start -- tax-minus-by-year --op-item Fineco
@@ -414,6 +424,7 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "portfolio" ||
     argv[0] === "search-asset" ||
     argv[0] === "asset-details" ||
+    argv[0] === "enrichment" ||
     argv[0] === "market-indices" ||
     argv[0] === "zero-commission-etfs" ||
     argv[0] === "tax-carry-forward" ||
@@ -533,8 +544,13 @@ function parseArgs(argv: string[]): CliArgs {
   const query =
     command === "search-asset" ||
     command === "asset-details" ||
+    command === "enrichment" ||
     command === "zero-commission-etfs"
       ? positional.shift()
+      : undefined;
+  const enrichmentTitle =
+    command === "enrichment" && positional.length > 0
+      ? positional.join(" ")
       : undefined;
 
   const dateFrom =
@@ -547,6 +563,9 @@ function parseArgs(argv: string[]): CliArgs {
   }
   if (command === "asset-details" && !query) {
     throw new UsageError("Expected instrument key after asset-details.");
+  }
+  if (command === "enrichment" && !query) {
+    throw new UsageError("Expected source URL after enrichment.");
   }
   if (command === "tax-carry-forward" && (!dateFrom || !dateTo)) {
     throw new UsageError(
@@ -576,13 +595,14 @@ function parseArgs(argv: string[]): CliArgs {
     );
   }
 
-  if (command === "zero-commission-etfs") {
+  if (command === "enrichment" || command === "zero-commission-etfs") {
     return {
       kind: "env",
       format,
       outPath,
       command,
       query,
+      enrichmentTitle,
       dateFrom,
       dateTo,
       orderType,
@@ -604,6 +624,7 @@ function parseArgs(argv: string[]): CliArgs {
       outPath,
       command,
       query,
+      enrichmentTitle,
       dateFrom,
       dateTo,
       orderType,
@@ -617,6 +638,7 @@ function parseArgs(argv: string[]): CliArgs {
       outPath,
       command,
       query,
+      enrichmentTitle,
       dateFrom,
       dateTo,
       orderType,
@@ -632,6 +654,7 @@ function parseArgs(argv: string[]): CliArgs {
       outPath,
       command,
       query,
+      enrichmentTitle,
       dateFrom,
       dateTo,
       orderType,
@@ -713,6 +736,7 @@ function buildConfig(
     debug: process.env.FINECO_DEBUG === "1",
     command: args.command,
     query: args.query,
+    enrichmentTitle: args.enrichmentTitle,
     dateFrom: args.dateFrom,
     dateTo: args.dateTo,
     orderType: args.orderType ?? "equity",
@@ -765,7 +789,10 @@ async function configFromArgsAndEnv(): Promise<Config> {
     password = args.password;
   }
 
-  if (args.command === "zero-commission-etfs") {
+  if (
+    args.command === "enrichment" ||
+    args.command === "zero-commission-etfs"
+  ) {
     return buildConfig(args, "", "");
   }
 
@@ -776,7 +803,9 @@ async function configFromArgsAndEnv(): Promise<Config> {
       ({ userId, password } = await credentialsFrom1Password(opItemName));
     } catch (error) {
       throw new Error(
-        `Could not read 1Password item "${opItemName}": ${(error as Error).message}`,
+        `Could not read 1Password item "${opItemName}": ${
+          (error as Error).message
+        }`,
       );
     }
   }
@@ -1095,15 +1124,29 @@ export function reportHtml(summary: PositionsSummary): string {
       return `<tr>
         <td>
           <div class="asset">${htmlEscape(position.description)}</div>
-          <div class="meta">${htmlEscape(position.symbol || position.instrId)} · ${htmlEscape(position.venueSystem)} · ${htmlEscape(position.type)}</div>
+          <div class="meta">${htmlEscape(
+            position.symbol || position.instrId,
+          )} · ${htmlEscape(position.venueSystem)} · ${htmlEscape(
+            position.type,
+          )}</div>
         </td>
-        <td class="num">${formatNumber(position.qty, { maximumFractionDigits: 6 })}</td>
-        <td class="num">${formatMoney(position.avgPrice, position.currencyCd)}</td>
-        <td class="num">${formatMoney(position.marketPrice, position.currencyCd)}</td>
+        <td class="num">${formatNumber(position.qty, {
+          maximumFractionDigits: 6,
+        })}</td>
+        <td class="num">${formatMoney(
+          position.avgPrice,
+          position.currencyCd,
+        )}</td>
+        <td class="num">${formatMoney(
+          position.marketPrice,
+          position.currencyCd,
+        )}</td>
         <td class="num">${formatMoney(position.bookValue)}</td>
         <td class="num strong">${formatMoney(position.marketValue)}</td>
         <td class="num ${profitClass}">${formatMoney(position.profitLoss)}</td>
-        <td class="num ${profitClass}">${formatPercent(position.profitLossPerc)}</td>
+        <td class="num ${profitClass}">${formatPercent(
+          position.profitLossPerc,
+        )}</td>
       </tr>`;
     })
     .join("");
@@ -1229,16 +1272,36 @@ export function reportHtml(summary: PositionsSummary): string {
     <header>
       <div>
         <h1>Fineco Portfolio Report</h1>
-        <div class="subtle">${rows.length} positions · ${htmlEscape(currencies.join(", "))}</div>
+        <div class="subtle">${rows.length} positions · ${htmlEscape(
+          currencies.join(", "),
+        )}</div>
       </div>
       <div class="captured">Captured<br>${htmlEscape(capturedAtText)}</div>
     </header>
 
     <section class="cards" aria-label="Portfolio summary">
-      <div class="card"><div class="label">Book Value</div><div class="value">${formatMoney(total.bookValue, total.currencyCd)}</div></div>
-      <div class="card"><div class="label">Market Value</div><div class="value">${formatMoney(total.marketValue, total.currencyCd)}</div></div>
-      <div class="card"><div class="label">Profit / Loss</div><div class="value ${(total.profitLoss ?? 0) > 0 ? "positive" : (total.profitLoss ?? 0) < 0 ? "negative" : ""}">${formatMoney(total.profitLoss, total.currencyCd)}</div></div>
-      <div class="card"><div class="label">Return</div><div class="value ${(total.profitLossPerc ?? 0) > 0 ? "positive" : (total.profitLossPerc ?? 0) < 0 ? "negative" : ""}">${formatPercent(total.profitLossPerc)}</div></div>
+      <div class="card"><div class="label">Book Value</div><div class="value">${formatMoney(
+        total.bookValue,
+        total.currencyCd,
+      )}</div></div>
+      <div class="card"><div class="label">Market Value</div><div class="value">${formatMoney(
+        total.marketValue,
+        total.currencyCd,
+      )}</div></div>
+      <div class="card"><div class="label">Profit / Loss</div><div class="value ${
+        (total.profitLoss ?? 0) > 0
+          ? "positive"
+          : (total.profitLoss ?? 0) < 0
+            ? "negative"
+            : ""
+      }">${formatMoney(total.profitLoss, total.currencyCd)}</div></div>
+      <div class="card"><div class="label">Return</div><div class="value ${
+        (total.profitLossPerc ?? 0) > 0
+          ? "positive"
+          : (total.profitLossPerc ?? 0) < 0
+            ? "negative"
+            : ""
+      }">${formatPercent(total.profitLossPerc)}</div></div>
     </section>
 
     <section class="table-wrap" aria-label="Positions">
@@ -1287,10 +1350,16 @@ function shareableReportHtml(summary: PositionsSummary): string {
       return `<tr>
         <td>
           <div class="asset">${htmlEscape(position.description)}</div>
-          <div class="meta">${htmlEscape(position.symbol || position.instrId)} · ${htmlEscape(position.venueSystem)} · ${htmlEscape(position.type)}</div>
+          <div class="meta">${htmlEscape(
+            position.symbol || position.instrId,
+          )} · ${htmlEscape(position.venueSystem)} · ${htmlEscape(
+            position.type,
+          )}</div>
         </td>
         <td class="num strong">${formatPercent(weight)}</td>
-        <td class="num ${profitClass}">${formatPercent(position.profitLossPerc)}</td>
+        <td class="num ${profitClass}">${formatPercent(
+          position.profitLossPerc,
+        )}</td>
       </tr>`;
     })
     .join("");
@@ -1416,14 +1485,24 @@ function shareableReportHtml(summary: PositionsSummary): string {
     <header>
       <div>
         <h1>Fineco Shareable Portfolio Report</h1>
-        <div class="subtle">${rows.length} positions · ${htmlEscape(currencies.join(", "))}</div>
+        <div class="subtle">${rows.length} positions · ${htmlEscape(
+          currencies.join(", "),
+        )}</div>
       </div>
       <div class="captured">Captured<br>${htmlEscape(capturedAtText)}</div>
     </header>
 
     <section class="cards" aria-label="Portfolio summary">
-      <div class="card"><div class="label">Portfolio Return</div><div class="value ${(total.profitLossPerc ?? 0) > 0 ? "positive" : (total.profitLossPerc ?? 0) < 0 ? "negative" : ""}">${formatPercent(total.profitLossPerc)}</div></div>
-      <div class="card"><div class="label">Positions</div><div class="value">${rows.length}</div></div>
+      <div class="card"><div class="label">Portfolio Return</div><div class="value ${
+        (total.profitLossPerc ?? 0) > 0
+          ? "positive"
+          : (total.profitLossPerc ?? 0) < 0
+            ? "negative"
+            : ""
+      }">${formatPercent(total.profitLossPerc)}</div></div>
+      <div class="card"><div class="label">Positions</div><div class="value">${
+        rows.length
+      }</div></div>
     </section>
 
     <section class="table-wrap" aria-label="Shareable positions">
@@ -1527,7 +1606,9 @@ export async function fetchPositionsSummary(
       status: positions.response.status,
       authExpired:
         positions.response.status === 401 || positions.response.status === 403,
-      error: `Positions summary API failed: HTTP ${positions.response.status} ${body.slice(0, 500)}`,
+      error: `Positions summary API failed: HTTP ${
+        positions.response.status
+      } ${body.slice(0, 500)}`,
     };
   }
 
@@ -1586,7 +1667,9 @@ async function fetchJsonApi<T>(
       status: response.response.status,
       authExpired:
         response.response.status === 401 || response.response.status === 403,
-      error: `${options.label} failed: HTTP ${response.response.status} ${body.slice(0, 500)}`,
+      error: `${options.label} failed: HTTP ${
+        response.response.status
+      } ${body.slice(0, 500)}`,
     };
   }
 
@@ -1622,9 +1705,13 @@ export async function fetchAssetDetails(
 ): Promise<ApiResult<unknown>> {
   if (!config.query) throw new Error("Missing asset details instrument key.");
   const instrument = splitInstrumentKey(config.query);
-  const referer = `https://finecobank.com/pvt/trading/snapshot/${encodeURIComponent(instrument.key)}`;
+  const referer = `https://finecobank.com/pvt/trading/snapshot/${encodeURIComponent(
+    instrument.key,
+  )}`;
 
-  const marketSnapshotUrl = `${config.snapshotUrl}/${encodeURIComponent(instrument.venueSystem)}/${encodeURIComponent(instrument.instrId)}`;
+  const marketSnapshotUrl = `${config.snapshotUrl}/${encodeURIComponent(
+    instrument.venueSystem,
+  )}/${encodeURIComponent(instrument.instrId)}`;
   const instrumentSnapshotUrl = new URL(config.instrumentSnapshotUrl);
   instrumentSnapshotUrl.searchParams.set("instruments", instrument.key);
 
@@ -1636,7 +1723,9 @@ export async function fetchAssetDetails(
   chartUrl.searchParams.set("output", "all");
   chartUrl.searchParams.set("useStartTime", "true");
 
-  const linkedIndicesUrl = `${config.linkedIndicesUrl}/${encodeURIComponent(instrument.key)}/linked-instrument/all`;
+  const linkedIndicesUrl = `${config.linkedIndicesUrl}/${encodeURIComponent(
+    instrument.key,
+  )}/linked-instrument/all`;
 
   const eventsUrl = new URL(config.economicEventsUrl);
   eventsUrl.searchParams.set("instruments", instrument.key);
@@ -1893,7 +1982,9 @@ export async function fetchZeroCommissionEtfs(
     return {
       ok: false,
       status: response.status,
-      error: `Zero-commission ETF list failed: HTTP ${response.status} ${body.slice(0, 500)}`,
+      error: `Zero-commission ETF list failed: HTTP ${
+        response.status
+      } ${body.slice(0, 500)}`,
     };
   }
 
@@ -1915,7 +2006,10 @@ export async function fetchZeroCommissionEtfs(
   } catch {
     return {
       ok: false,
-      error: `Zero-commission ETF list returned non-JSON: ${body.slice(0, 500)}`,
+      error: `Zero-commission ETF list returned non-JSON: ${body.slice(
+        0,
+        500,
+      )}`,
     };
   }
 }
@@ -1982,14 +2076,20 @@ export async function login(
 
   debug(
     home
-      ? `Preflight: HTTP ${home.response.status}, cookies=${cookieNamesFromHeader(home.cookie).join(", ") || "(none)"}`
+      ? `Preflight: HTTP ${home.response.status}, cookies=${
+          cookieNamesFromHeader(home.cookie).join(", ") || "(none)"
+        }`
       : "Preflight: skipped after fetch failure",
   );
   debug(
-    `Synthetic cookies: ${cookieNamesFromHeader(generatedCookie).join(", ") || "(none)"}`,
+    `Synthetic cookies: ${
+      cookieNamesFromHeader(generatedCookie).join(", ") || "(none)"
+    }`,
   );
   debug(
-    `Login request cookies: ${cookieNamesFromHeader(loginRequestCookie).join(", ") || "(none)"}`,
+    `Login request cookies: ${
+      cookieNamesFromHeader(loginRequestCookie).join(", ") || "(none)"
+    }`,
   );
 
   const loginResponse = await fetchWithCookieJar(
@@ -2010,7 +2110,9 @@ export async function login(
     getSetCookieHeaders(loginResponse.response),
   );
   debug(
-    `Login response: HTTP ${loginResponse.response.status}, set-cookie=${cookieNamesFromHeader(loginCookie).join(", ") || "(none)"}`,
+    `Login response: HTTP ${loginResponse.response.status}, set-cookie=${
+      cookieNamesFromHeader(loginCookie).join(", ") || "(none)"
+    }`,
   );
 
   if (!loginResponse.response.ok) {
@@ -2044,6 +2146,22 @@ async function main(): Promise<void> {
   const debug = makeLogger(config);
 
   try {
+    if (config.command === "enrichment") {
+      if (!config.query) throw new Error("Missing enrichment source URL.");
+      const report = await fetchEnrichmentReport({
+        url: config.query,
+        ...(config.enrichmentTitle === undefined
+          ? {}
+          : { finecoTitle: config.enrichmentTitle }),
+      });
+      await emitOutput(
+        config.outPath ? report.markdown : renderJsonOutput(report),
+        config.outPath,
+      );
+      if (config.outPath) debug(`Output saved to ${config.outPath}`);
+      return;
+    }
+
     if (config.command === "zero-commission-etfs") {
       const zeroCommissionEtfs = await fetchZeroCommissionEtfs({
         debug,

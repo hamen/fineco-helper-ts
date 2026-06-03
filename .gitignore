@@ -6,6 +6,7 @@ dist/
 *.local.html
 *.local.json
 *.local.csv
+enrichment-reports/
 
 .DS_Store
 *.log
