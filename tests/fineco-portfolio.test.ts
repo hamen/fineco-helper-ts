@@ -279,22 +279,58 @@ describe("enrichment", () => {
   }
 
   function fixtureUrl(): string {
-    const html = `<script>window.__REACT_QUERY_STATE__ = {
-      queries: [{
-        queryKey: ["company"],
-        state: { data: { data: {
-          name: "Apple Inc.",
-          unique_symbol: "NasdaqGS:AAPL",
-          info: { name: "Apple Inc.", unique_symbol: "NasdaqGS:AAPL", exchange_symbol: "NasdaqGS", isin_symbol: "US0378331005", country: "United States", url: "https://www.apple.com", description: "Consumer technology company." },
-          score: { data: { value: 2, future: 3, past: 5 } },
-          analysis: { data: { extended: { data: {
-            raw_data: { data: { company_info: { name: "Apple Inc.", unique_symbol: "NasdaqGS:AAPL", exchange_symbol: "NasdaqGS", isin_symbol: "US0378331005", country: "United States", url: "https://www.apple.com", description: "Consumer technology company." } } },
-            analysis: { value: { pe: 28.4, market_cap: 3000000000000 }, future: { revenue_growth_annual: 0.04 } },
-            scores: { value: 2, future: 3, past: 5 }
-          } } } }
-        } } }
-      }]
-    }</script>`;
+    const state = {
+      queries: [
+        {
+          queryKey: ["company"],
+          state: {
+            data: {
+              data: {
+                name: "Apple Inc.",
+                unique_symbol: "NasdaqGS:AAPL",
+                info: {
+                  name: "Apple Inc.",
+                  unique_symbol: "NasdaqGS:AAPL",
+                  exchange_symbol: "NasdaqGS",
+                  isin_symbol: "US0378331005",
+                  country: "United States",
+                  url: "https://www.apple.com",
+                  description: "Consumer technology company.",
+                },
+                score: { data: { value: 2, future: 3, past: 5 } },
+                analysis: {
+                  data: {
+                    extended: {
+                      data: {
+                        raw_data: {
+                          data: {
+                            company_info: {
+                              name: "Apple Inc.",
+                              unique_symbol: "NasdaqGS:AAPL",
+                              exchange_symbol: "NasdaqGS",
+                              isin_symbol: "US0378331005",
+                              country: "United States",
+                              url: "https://www.apple.com",
+                              description: "Consumer technology company.",
+                            },
+                          },
+                        },
+                        analysis: {
+                          value: { pe: 28.4, market_cap: 3000000000000 },
+                          future: { revenue_growth_annual: 0.04 },
+                        },
+                        scores: { value: 2, future: 3, past: 5 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const html = `<script>window.__REACT_QUERY_STATE__ = ${JSON.stringify(state)}</script>`;
     return `data:text/html,${encodeURIComponent(html)}`;
   }
 
@@ -381,6 +417,41 @@ describe("enrichment", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("rejects non-JSON embedded cache payloads", async () => {
+    await assert.rejects(
+      () =>
+        fetchEnrichmentReport({
+          url: `data:text/html,${encodeURIComponent("<script>window.__REACT_QUERY_STATE__ = (() => ({ queries: [] }))()</script>")}`,
+          validateSource: false,
+        }),
+      /Embedded query cache was not valid JSON data/,
+    );
+  });
+
+  it("parses bare undefined values as missing JSON data", async () => {
+    const html = `<script>window.__REACT_QUERY_STATE__ = {"queries":[{"queryKey":["company"],"state":{"data":{"data":{"name":"Undefined Test","unique_symbol":"TEST:U","analysis":{"data":{"extended":{"data":{"raw_data":{"data":{"company_info":{"name":"Undefined Test","unique_symbol":"TEST:U","description":"literal undefined stays in strings"}}},"analysis":{"value":{"pe":undefined}},"scores":{"value":undefined}}}}}}}}}]}</script>`;
+    const report = await fetchEnrichmentReport({
+      url: `data:text/html,${encodeURIComponent(html)}`,
+      validateSource: false,
+    });
+
+    assert.equal(report.company.name, "Undefined Test");
+    assert.equal(report.metrics.value?.pe, null);
+  });
+
+  it("rejects null embedded cache payloads without crashing", async () => {
+    const html = "<script>window.__REACT_QUERY_STATE__ = null</script>";
+
+    await assert.rejects(
+      () =>
+        fetchEnrichmentReport({
+          url: `data:text/html,${encodeURIComponent(html)}`,
+          validateSource: false,
+        }),
+      /Embedded query cache was not a JSON object/,
+    );
   });
 
   it("scores weak title matches conservatively", () => {

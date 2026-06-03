@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import vm from "node:vm";
 
 const STOCK_PATH_SUFFIX =
   /\/(valuation|future|past|health|dividend|management|ownership|information)\/?$/;
@@ -245,7 +244,7 @@ async function fetchText(
 
 export function parseEnrichmentState(html: string): QueryState {
   const match = html.match(
-    /<script>window\.__REACT_QUERY_STATE__ = ([\s\S]*?)<\/script>/,
+    /<script>\s*window\.__REACT_QUERY_STATE__\s*=\s*([\s\S]*?)<\/script>/,
   );
   if (!match) {
     throw new Error(
@@ -253,10 +252,68 @@ export function parseEnrichmentState(html: string): QueryState {
     );
   }
 
-  const sandbox = { window: {} as { __REACT_QUERY_STATE__?: QueryState } };
-  vm.createContext(sandbox);
-  vm.runInContext(`window.__REACT_QUERY_STATE__ = ${match[1]}`, sandbox);
-  return sandbox.window.__REACT_QUERY_STATE__ ?? {};
+  const payload = normalizeJsonLikePayload(
+    match[1]?.trim().replace(/;$/, "") ?? "",
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload) as unknown;
+  } catch {
+    throw new Error("Embedded query cache was not valid JSON data.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Embedded query cache was not a JSON object.");
+  }
+  return parsed as QueryState;
+}
+
+function normalizeJsonLikePayload(payload: string): string {
+  let output = "";
+  let index = 0;
+  let inString = false;
+  let escaped = false;
+
+  while (index < payload.length) {
+    const char = payload[index]!;
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      index += 1;
+      continue;
+    }
+
+    if (
+      payload.startsWith("undefined", index) &&
+      !isIdentifierChar(payload[index - 1]) &&
+      !isIdentifierChar(payload[index + "undefined".length])
+    ) {
+      output += "null";
+      index += "undefined".length;
+      continue;
+    }
+
+    output += char;
+    index += 1;
+  }
+
+  return output;
+}
+
+function isIdentifierChar(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_$]/.test(char);
 }
 
 function query(state: QueryState, name: string): unknown {
