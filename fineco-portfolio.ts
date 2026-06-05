@@ -50,6 +50,8 @@ export const ORDER_MONITOR_URL =
   "https://private-api.finecobank.com/v1/private/tol/transactions";
 export const ORDER_MONITOR_FILTERS_URL =
   "https://private-api.finecobank.com/v1/private/tol/monitor-filters";
+export const MOVEMENTS_URL =
+  "https://private-api.finecobank.com/v2/private/accounts-and-cards/movements";
 
 type CliCommand =
   | "portfolio"
@@ -61,7 +63,8 @@ type CliCommand =
   | "tax-carry-forward"
   | "tax-minus-by-year"
   | "order-monitor"
-  | "order-monitor-filters";
+  | "order-monitor-filters"
+  | "movements";
 
 const assetDetailFields = [
   "instrId",
@@ -351,6 +354,7 @@ function usage(): string {
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- tax-minus-by-year USER PASSWORD [--out path]
   npm start -- tax-minus-by-year --op-item "Fineco" [--out path]
+  npm start -- movements DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- order-monitor [--type equity] [--days 0] --op-item "Fineco" [--out path]
   npm start -- order-monitor-filters [--type equity] --op-item "Fineco" [--out path]
   npm start -- zero-commission-etfs [query] [--out path]
@@ -430,7 +434,8 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "tax-carry-forward" ||
     argv[0] === "tax-minus-by-year" ||
     argv[0] === "order-monitor" ||
-    argv[0] === "order-monitor-filters"
+    argv[0] === "order-monitor-filters" ||
+    argv[0] === "movements"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -553,10 +558,10 @@ function parseArgs(argv: string[]): CliArgs {
       ? positional.join(" ")
       : undefined;
 
-  const dateFrom =
-    command === "tax-carry-forward" ? positional.shift() : undefined;
-  const dateTo =
-    command === "tax-carry-forward" ? positional.shift() : undefined;
+  const wantsDateRange =
+    command === "tax-carry-forward" || command === "movements";
+  const dateFrom = wantsDateRange ? positional.shift() : undefined;
+  const dateTo = wantsDateRange ? positional.shift() : undefined;
 
   if (command === "search-asset" && !query) {
     throw new UsageError("Expected search text after search-asset.");
@@ -567,26 +572,19 @@ function parseArgs(argv: string[]): CliArgs {
   if (command === "enrichment" && !query) {
     throw new UsageError("Expected source URL after enrichment.");
   }
-  if (command === "tax-carry-forward" && (!dateFrom || !dateTo)) {
-    throw new UsageError(
-      "Expected DATE_FROM and DATE_TO after tax-carry-forward.",
-    );
+  if (wantsDateRange && (!dateFrom || !dateTo)) {
+    throw new UsageError(`Expected DATE_FROM and DATE_TO after ${command}.`);
+  }
+  if (wantsDateRange && (!isIsoDate(dateFrom) || !isIsoDate(dateTo))) {
+    throw new UsageError(`${command} dates must use YYYY-MM-DD format.`);
   }
   if (
-    command === "tax-carry-forward" &&
-    (!isIsoDate(dateFrom) || !isIsoDate(dateTo))
-  ) {
-    throw new UsageError("tax-carry-forward dates must use YYYY-MM-DD format.");
-  }
-  if (
-    command === "tax-carry-forward" &&
+    wantsDateRange &&
     isIsoDate(dateFrom) &&
     isIsoDate(dateTo) &&
     dateFrom > dateTo
   ) {
-    throw new UsageError(
-      "tax-carry-forward DATE_FROM must be on or before DATE_TO.",
-    );
+    throw new UsageError(`${command} DATE_FROM must be on or before DATE_TO.`);
   }
 
   if (command === "zero-commission-etfs" && positional.length > 0) {
@@ -1926,6 +1924,104 @@ export async function fetchOrderMonitorFilters(
   });
 }
 
+export type Movement = {
+  dataOperazione: string;
+  dataValuta?: string;
+  causale?: string;
+  descrizione?: string;
+  descrizioneBreve?: string;
+  importo: number;
+  causaleMovimento?: string;
+  tipoMovimento?: string;
+  bfCategoria?: string | null;
+  bfSottocategoria?: string | null;
+  bfIdBrand?: string | null;
+  progressivoMovimento?: string;
+};
+
+type MovementsPage = {
+  movimenti?: Movement[];
+  lastPage?: boolean;
+  limitedResult?: boolean;
+  balanceAccountAtSearchDate?: number;
+  balanceAccountAtMovement?: number;
+};
+
+export type MovementsResult = {
+  movimenti: Movement[];
+  count: number;
+  dateFrom: string;
+  dateTo: string;
+  balanceAccountAtSearchDate?: number;
+  balanceAccountAtMovement?: number;
+};
+
+// Pulls current-account + cards movements over an arbitrary date range,
+// auto-paginating with offset/limit until the API reports the last page.
+// This is what bypasses the web UI's statement-download cap.
+export async function fetchMovements(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<MovementsResult>> {
+  if (!config.dateFrom || !config.dateTo) {
+    throw new Error("Missing movements date range.");
+  }
+  const dateFromIso = `${config.dateFrom}T00:00:00.000Z`;
+  const dateToIso = `${config.dateTo}T23:59:59.999Z`;
+  const limit = 250;
+  const all: Movement[] = [];
+  let offset = 0;
+  let balanceAtSearch: number | undefined;
+  let balanceAtMovement: number | undefined;
+
+  for (;;) {
+    const page = await fetchJsonApi<MovementsPage>(MOVEMENTS_URL, cookie, debug, {
+      label: "Movements API",
+      method: "POST",
+      referer: "https://finecobank.com/pvt/conto-corrente/saldo-e-movimenti",
+      body: {
+        dateFrom: dateFromIso,
+        dateTo: dateToIso,
+        offset,
+        limit,
+        keyword: "",
+      },
+    });
+    if (!page.ok) return page;
+
+    const batch = page.data.movimenti ?? [];
+    if (offset === 0) {
+      balanceAtSearch = page.data.balanceAccountAtSearchDate;
+      balanceAtMovement = page.data.balanceAccountAtMovement;
+    }
+    all.push(...batch);
+    debug(
+      `Movements: offset=${offset}, batch=${batch.length}, total=${all.length}, lastPage=${page.data.lastPage}`,
+    );
+
+    if (page.data.lastPage || batch.length === 0) break;
+    offset += limit;
+    if (offset > 200_000) break; // safety backstop against a runaway loop
+  }
+
+  return {
+    ok: true,
+    data: {
+      movimenti: all,
+      count: all.length,
+      dateFrom: config.dateFrom,
+      dateTo: config.dateTo,
+      ...(balanceAtSearch === undefined
+        ? {}
+        : { balanceAccountAtSearchDate: balanceAtSearch }),
+      ...(balanceAtMovement === undefined
+        ? {}
+        : { balanceAccountAtMovement: balanceAtMovement }),
+    },
+  };
+}
+
 export function filterZeroCommissionEtfs(
   instruments: ZeroCommissionEtf[],
   query: string | undefined,
@@ -2245,6 +2341,10 @@ async function main(): Promise<void> {
         renderJsonOutput(orderMonitorFilters.data),
         config.outPath,
       );
+    } else if (config.command === "movements") {
+      const movements = await fetchMovements(config, authenticatedCookie, debug);
+      if (!movements.ok) throw new Error(movements.error);
+      await emitOutput(renderJsonOutput(movements.data), config.outPath);
     } else {
       const exhaustiveCheck: never = config.command;
       throw new Error(`Unsupported command: ${exhaustiveCheck}`);
