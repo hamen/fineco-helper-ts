@@ -21,8 +21,7 @@ import {
   dividendsFromMovements,
   retryAfterSeconds,
   renderOutput,
-  positionWeightPerc,
-  portfolioTotalMarketValue,
+  envIndex,
   type Movement,
   type Config,
   type Position,
@@ -928,6 +927,23 @@ describe("dividendsFromMovements", () => {
     assert.equal(report.events[0]!.security, "PM-7");
   });
 
+  it("treats a description that is only the prefix as unlabelled", () => {
+    // "Div.su " alone parses to "", which is not a label: two such rows must not
+    // share a group key, and `security` must not come back blank.
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su   ", 200),
+        movement("DII", "2026-02-10", "Div.su ", 50),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
+    for (const event of report.events) {
+      assert.equal(event.security, "(unlabelled movement)");
+    }
+  });
+
   it("echoes the requested range on an empty result", () => {
     const report = dividendsFromMovements([], META);
 
@@ -1358,5 +1374,17 @@ describe("fetchZeroCommissionEtfs", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("envIndex", () => {
+  it("uses the configured value", () => {
+    assert.equal(envIndex("3", "0"), "3");
+  });
+
+  it("falls back when the variable is unset, empty, or blank", () => {
+    assert.equal(envIndex(undefined, "0"), "0");
+    assert.equal(envIndex("", "0"), "0");
+    assert.equal(envIndex("   ", "0"), "0");
   });
 });

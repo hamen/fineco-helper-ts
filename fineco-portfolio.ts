@@ -82,6 +82,13 @@ export function retryAfterSeconds(
   return Math.max(0, Math.ceil((when - now) / 1000));
 }
 
+// An exported empty env var is not a configured index: `?? "0"` would let it
+// through and send a blank header, which is a misconfiguration nobody would see.
+export function envIndex(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
+
 function indexHeaders(config: Config): Record<string, string> {
   return {
     "X-Account-Index": config.accountIndex ?? DEFAULT_ACCOUNT_INDEX,
@@ -830,8 +837,14 @@ function buildConfig(
     newsUrl: process.env.FINECO_NEWS_URL ?? NEWS_URL,
     instrumentListUrl:
       process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
-    accountIndex: process.env.FINECO_ACCOUNT_INDEX ?? DEFAULT_ACCOUNT_INDEX,
-    dossierIndex: process.env.FINECO_DOSSIER_INDEX ?? DEFAULT_DOSSIER_INDEX,
+    accountIndex: envIndex(
+      process.env.FINECO_ACCOUNT_INDEX,
+      DEFAULT_ACCOUNT_INDEX,
+    ),
+    dossierIndex: envIndex(
+      process.env.FINECO_DOSSIER_INDEX,
+      DEFAULT_DOSSIER_INDEX,
+    ),
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
 }
@@ -2204,9 +2217,12 @@ function securityLabel(
 ): string | undefined {
   if (!description) return undefined;
   const trimmed = description.trim();
-  return trimmed.startsWith(prefix)
-    ? trimmed.slice(prefix.length).trim()
-    : undefined;
+  if (!trimmed.startsWith(prefix)) return undefined;
+  // A description that is nothing but the prefix parses to "", which is not a
+  // label. Returning it would put a blank `security` in the report and let two
+  // unrelated blank rows share a group key.
+  const label = trimmed.slice(prefix.length).trim();
+  return label === "" ? undefined : label;
 }
 
 export function dividendsFromMovements(

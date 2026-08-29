@@ -148,7 +148,12 @@ describe("MCP tool error payloads", () => {
     const parsed = JSON.parse(text.slice(text.indexOf("{"))) as {
       retryAfterSeconds: number;
     };
-    assert.ok(parsed.retryAfterSeconds > 0 && parsed.retryAfterSeconds <= 45);
+    // toUTCString() drops milliseconds, so the value lands at 44 or 45. The bound
+    // that matters is that it is a finite, non-negative number: a loose upper
+    // bound would let NaN or an absurd wait through.
+    assert.ok(Number.isFinite(parsed.retryAfterSeconds));
+    assert.ok(parsed.retryAfterSeconds >= 0);
+    assert.ok(parsed.retryAfterSeconds <= 45);
   });
 
   it("omits retryAfterSeconds when the header is absent or unparseable", async () => {
@@ -221,6 +226,94 @@ describe("MCP per-call account and dossier index", () => {
     assert.equal(seen.value?.get("x-account-index"), "6");
     assert.equal(seen.value?.get("x-dossier-index"), "7");
   });
+
+  it("reaches the wire from generate_report", async () => {
+    const seen: { value?: Headers } = {};
+
+    await callTool(
+      "generate_report",
+      { output_path: "/tmp/fineco-relay-test-report.html", account_index: 8 },
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      seen,
+    );
+
+    assert.equal(seen.value?.get("x-account-index"), "8");
+  });
+
+  it("prefers the per-call value over the environment", async () => {
+    const original = process.env.FINECO_ACCOUNT_INDEX;
+    process.env.FINECO_ACCOUNT_INDEX = "1";
+    const seen: { value?: Headers } = {};
+
+    try {
+      await callTool(
+        "get_movements",
+        { ...RANGE, account_index: 9 },
+        () =>
+          new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        seen,
+      );
+
+      assert.equal(seen.value?.get("x-account-index"), "9");
+    } finally {
+      if (original === undefined) delete process.env.FINECO_ACCOUNT_INDEX;
+      else process.env.FINECO_ACCOUNT_INDEX = original;
+    }
+  });
+
+  it("uses the environment when no per-call value is given, and 0 with neither", async () => {
+    const original = process.env.FINECO_ACCOUNT_INDEX;
+    const respond = () =>
+      new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      process.env.FINECO_ACCOUNT_INDEX = "5";
+      const fromEnv: { value?: Headers } = {};
+      await callTool("get_movements", RANGE, respond, fromEnv);
+      assert.equal(fromEnv.value?.get("x-account-index"), "5");
+
+      delete process.env.FINECO_ACCOUNT_INDEX;
+      const fromDefault: { value?: Headers } = {};
+      await callTool("get_movements", RANGE, respond, fromDefault);
+      assert.equal(fromDefault.value?.get("x-account-index"), "0");
+    } finally {
+      if (original === undefined) delete process.env.FINECO_ACCOUNT_INDEX;
+      else process.env.FINECO_ACCOUNT_INDEX = original;
+    }
+  });
+});
+
+describe("MCP date range validation", () => {
+  // Zod only enforces the YYYY-MM-DD shape; the ordering check lives in
+  // parseDateRange, and nothing reached it through a tool before this.
+  const neverCalled = () => {
+    throw new Error("the tool should not have reached the network");
+  };
+
+  for (const tool of ["get_movements", "get_dividends"]) {
+    it(`rejects an inverted range in ${tool}`, async () => {
+      const result = await callTool(
+        tool,
+        { date_from: "2026-03-31", date_to: "2026-01-01" },
+        neverCalled,
+      );
+
+      assert.ok(
+        result.content[0]!.text.includes("on or before"),
+        result.content[0]!.text,
+      );
+    });
+  }
 });
 
 describe("MCP dividend tool", () => {

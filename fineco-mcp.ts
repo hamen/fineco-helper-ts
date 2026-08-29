@@ -31,6 +31,7 @@ import {
   fetchZeroCommissionEtfs,
   DEFAULT_ACCOUNT_INDEX,
   DEFAULT_DOSSIER_INDEX,
+  envIndex,
   dividendsFromMovements,
   fetchMovements,
   isIsoDate,
@@ -67,7 +68,7 @@ function resolveIndex(
   fallback: string,
 ): string {
   if (override !== undefined) return String(override);
-  return envValue ?? fallback;
+  return envIndex(envValue, fallback);
 }
 
 async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
