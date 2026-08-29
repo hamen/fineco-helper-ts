@@ -814,6 +814,9 @@ describe("dividendsFromMovements", () => {
 
     assert.equal(report.events.length, 1);
     assert.equal(report.events[0]!.kind, "remunerated_portfolio");
+    // Both legs, not only the net: two compensating errors keep the net intact.
+    assert.equal(report.events[0]!.grossCents, 4000);
+    assert.equal(report.events[0]!.withholdingCents, 1040);
     assert.equal(report.events[0]!.netCents, 2960);
   });
 
@@ -942,6 +945,36 @@ describe("dividendsFromMovements", () => {
     for (const event of report.events) {
       assert.equal(event.security, "(unlabelled movement)");
     }
+  });
+
+  it("does not pair a gross and a withholding that both lack a description", () => {
+    // This is the merge the row-index fallback exists to stop: without it both rows
+    // share a key and net out to a single, wrong event.
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", undefined, 200),
+        movement("DIR", "2026-02-10", undefined, -52),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
+    assert.equal(report.events[0]!.unpaired, "withholding");
+    assert.equal(report.events[0]!.grossCents, 20000);
+    assert.equal(report.events[1]!.unpaired, "gross");
+    assert.equal(report.events[1]!.withholdingCents, 5200);
+  });
+
+  it("does not pair legs that share no progressivoMovimento", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DPR", "2026-02-20", undefined, 40, "PM-1"),
+        movement("RPR", "2026-02-20", undefined, -10.4, "PM-2"),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
   });
 
   it("echoes the requested range on an empty result", () => {
@@ -1093,10 +1126,11 @@ describe("renderOutput json", () => {
       .find((line) => line.includes("Alpha"))!;
     const alphaJson = payload.rows.find((row) => row.instrId === "AAA")!;
 
-    assert.ok(
-      alphaRow
-        .split(",")
-        [weightColumn]!.startsWith(String(Math.trunc(alphaJson.weightPerc!))),
+    // Full numeric compare, not an integer prefix: "25" also prefixes "25.9" and
+    // "250", so a prefix match accepts a differently-computed weight.
+    assert.equal(
+      Number(alphaRow.split(",")[weightColumn]),
+      alphaJson.weightPerc,
     );
   });
 

@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -107,15 +110,19 @@ describe("MCP tool error payloads", () => {
     assert.ok(text.includes("45"), text);
   });
 
-  it("explains the SCA window on a 451 from get_dividends", async () => {
-    const result = await callTool(
-      "get_dividends",
-      RANGE,
-      () => new Response("Sca di sessione non valida", { status: 451 }),
-    );
+  for (const tool of ["get_dividends", "get_movements"]) {
+    it(`explains the SCA window on a 451 from ${tool}`, async () => {
+      // Both movement tools reach the same endpoint, and the explanation has to
+      // survive to the tool response on each of them, not only in fetchMovements.
+      const result = await callTool(
+        tool,
+        RANGE,
+        () => new Response("Sca di sessione non valida", { status: 451 }),
+      );
 
-    assert.ok(result.content[0]!.text.includes("90 days"));
-  });
+      assert.ok(result.content[0]!.text.includes("90 days"));
+    });
+  }
 
   it("still reports an expired session rather than a dead tool", async () => {
     // The authExpired arm has to survive the shared error mapper: a 401 must clear
@@ -229,19 +236,26 @@ describe("MCP per-call account and dossier index", () => {
 
   it("reaches the wire from generate_report", async () => {
     const seen: { value?: Headers } = {};
+    const reportPath = join(await mkdtemp(join(tmpdir(), "fineco-")), "r.html");
 
-    await callTool(
-      "generate_report",
-      { output_path: "/tmp/fineco-relay-test-report.html", account_index: 8 },
-      () =>
-        new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      seen,
-    );
+    try {
+      await callTool(
+        "generate_report",
+        { output_path: reportPath, account_index: 8, dossier_index: 9 },
+        () =>
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        seen,
+      );
 
-    assert.equal(seen.value?.get("x-account-index"), "8");
+      assert.equal(seen.value?.get("x-account-index"), "8");
+      assert.equal(seen.value?.get("x-dossier-index"), "9");
+    } finally {
+      // This tool writes a real file; a header check should not leave one behind.
+      await rm(reportPath, { force: true });
+    }
   });
 
   it("prefers the per-call value over the environment", async () => {

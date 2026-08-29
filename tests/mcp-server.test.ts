@@ -80,6 +80,19 @@ describe("MCP server", () => {
         );
       }
 
+      // The portfolio tools take the same index params, and only the in-process
+      // wire tests would notice if they disappeared from the schema.
+      for (const name of ["get_portfolio", "generate_report"]) {
+        const schema = tools.find((t) => t.name === name)!.inputSchema as {
+          properties?: Record<string, unknown>;
+        };
+        assert.ok(
+          schema.properties?.["account_index"] !== undefined &&
+            schema.properties["dossier_index"] !== undefined,
+          `${name} should accept account_index and dossier_index`,
+        );
+      }
+
       const search = tools.find((t) => t.name === "search_asset")!;
       assert.ok(
         JSON.stringify(search.inputSchema).includes("query"),
