@@ -17,6 +17,7 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
   handler: (url: string) => Response,
+  seenHeaders?: { value?: Headers },
 ): Promise<ToolText> {
   const originalFetch = globalThis.fetch;
   const originalUser = process.env.FINECO_USER_ID;
@@ -25,8 +26,11 @@ async function callTool(
   process.env.FINECO_USER_ID = "test";
   process.env.FINECO_PASSWORD = "test";
 
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     const url = String(input);
+    if (seenHeaders && !url.includes("/authentications/")) {
+      seenHeaders.value = new Headers(init?.headers);
+    }
     if (url.includes("/authentications/web/login")) {
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -125,6 +129,97 @@ describe("MCP tool error payloads", () => {
     const text = result.content[0]!.text;
     assert.ok(text.includes("authentication expired"), text);
     assert.ok(text.includes("authExpired"), text);
+  });
+
+  it("parses the HTTP-date form of Retry-After at the tool level", async () => {
+    const when = new Date(Date.now() + 45_000).toUTCString();
+    const result = await callTool(
+      "get_movements",
+      RANGE,
+      () =>
+        new Response("slow down", {
+          status: 429,
+          headers: { "retry-after": when },
+        }),
+    );
+
+    const text = result.content[0]!.text;
+    assert.ok(text.includes("retryAfterSeconds"), text);
+    const parsed = JSON.parse(text.slice(text.indexOf("{"))) as {
+      retryAfterSeconds: number;
+    };
+    assert.ok(parsed.retryAfterSeconds > 0 && parsed.retryAfterSeconds <= 45);
+  });
+
+  it("omits retryAfterSeconds when the header is absent or unparseable", async () => {
+    for (const headers of [{}, { "retry-after": "soon" }]) {
+      const result = await callTool(
+        "get_movements",
+        RANGE,
+        () => new Response("slow down", { status: 429, headers }),
+      );
+
+      const text = result.content[0]!.text;
+      assert.ok(!text.includes("retryAfterSeconds"), text);
+      // The status still travels, so the caller knows it was rate limited.
+      assert.ok(text.includes("429"), text);
+    }
+  });
+});
+
+describe("MCP per-call account and dossier index", () => {
+  it("reaches the wire from get_movements", async () => {
+    const seen: { value?: Headers } = {};
+
+    await callTool(
+      "get_movements",
+      { ...RANGE, account_index: 2, dossier_index: 3 },
+      () =>
+        new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      seen,
+    );
+
+    assert.equal(seen.value?.get("x-account-index"), "2");
+    assert.equal(seen.value?.get("x-dossier-index"), "3");
+  });
+
+  it("reaches the wire from get_dividends", async () => {
+    const seen: { value?: Headers } = {};
+
+    await callTool(
+      "get_dividends",
+      { ...RANGE, account_index: 4, dossier_index: 5 },
+      () =>
+        new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      seen,
+    );
+
+    assert.equal(seen.value?.get("x-account-index"), "4");
+    assert.equal(seen.value?.get("x-dossier-index"), "5");
+  });
+
+  it("reaches the wire from get_portfolio", async () => {
+    const seen: { value?: Headers } = {};
+
+    await callTool(
+      "get_portfolio",
+      { account_index: 6, dossier_index: 7 },
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      seen,
+    );
+
+    assert.equal(seen.value?.get("x-account-index"), "6");
+    assert.equal(seen.value?.get("x-dossier-index"), "7");
   });
 });
 

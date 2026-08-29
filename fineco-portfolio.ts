@@ -77,7 +77,9 @@ export function retryAfterSeconds(
 
   const when = Date.parse(trimmed);
   if (Number.isNaN(when)) return undefined;
-  return Math.max(0, Math.round((when - now) / 1000));
+  // Ceil, not round: rounding a sub-second remainder down to 0 tells the caller to
+  // retry at once, before the server said it may.
+  return Math.max(0, Math.ceil((when - now) / 1000));
 }
 
 function indexHeaders(config: Config): Record<string, string> {
@@ -2356,9 +2358,12 @@ export async function fetchZeroCommissionEtfs(
   );
 
   if (!response.ok) {
+    const retryAfter =
+      response.status === 429 ? retryAfterSeconds(response) : undefined;
     return {
       ok: false,
       status: response.status,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `Zero-commission ETF list failed: HTTP ${
         response.status
       } ${body.slice(0, 500)}`,

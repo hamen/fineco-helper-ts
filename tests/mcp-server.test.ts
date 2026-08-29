@@ -59,6 +59,27 @@ describe("MCP server", () => {
         "generate_report should have an output_path parameter",
       );
 
+      // The date range is required on both movement tools, and the optional index
+      // params have to be present or a caller cannot reach a second dossier.
+      for (const name of ["get_movements", "get_dividends"]) {
+        const tool = tools.find((t) => t.name === name)!;
+        const schema = tool.inputSchema as {
+          properties?: Record<string, unknown>;
+          required?: string[];
+        };
+
+        assert.deepEqual(
+          [...(schema.required ?? [])].sort(),
+          ["date_from", "date_to"],
+          `${name} should require date_from and date_to`,
+        );
+        assert.ok(
+          schema.properties?.["account_index"] !== undefined &&
+            schema.properties["dossier_index"] !== undefined,
+          `${name} should accept account_index and dossier_index`,
+        );
+      }
+
       const search = tools.find((t) => t.name === "search_asset")!;
       assert.ok(
         JSON.stringify(search.inputSchema).includes("query"),

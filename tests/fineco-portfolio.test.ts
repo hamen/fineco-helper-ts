@@ -13,6 +13,8 @@ import {
   fetchOrderMonitorFilters,
   fetchTaxCarryForward,
   fetchMovements,
+  fetchZeroCommissionEtfs,
+  logout,
   fetchPositionsSummary,
   fetchTaxMinusByYear,
   isIsoDate,
@@ -764,10 +766,12 @@ const META = {
 
 describe("dividendsFromMovements", () => {
   it("pairs an Italian dividend with its withholding", () => {
+    // Amounts with real cents, not round numbers: they are what exercises the
+    // Math.round path, where a float would drift.
     const report = dividendsFromMovements(
       [
-        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 200),
-        movement("DIR", "2026-02-10", "Rit.div.su 100,000 EXAMPLE SPA", -52),
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 147.73),
+        movement("DIR", "2026-02-10", "Rit.div.su 100,000 EXAMPLE SPA", -38.41),
       ],
       META,
     );
@@ -776,11 +780,11 @@ describe("dividendsFromMovements", () => {
     const event = report.events[0]!;
     assert.equal(event.security, "100,000 EXAMPLE SPA");
     assert.equal(event.kind, "dividend");
-    assert.equal(event.grossCents, 20000);
-    assert.equal(event.withholdingCents, 5200);
-    assert.equal(event.netCents, 14800);
+    assert.equal(event.grossCents, 14773);
+    assert.equal(event.withholdingCents, 3841);
+    assert.equal(event.netCents, 10932);
     assert.equal(event.unpaired, undefined);
-    assert.equal(report.totals.netCents, 14800);
+    assert.equal(report.totals.netCents, 10932);
     assert.equal(report.assumedCurrency, "EUR");
     assert.equal(report.capturedAt, META.capturedAt);
   });
@@ -1273,6 +1277,84 @@ describe("fetchMovements", () => {
       );
 
       assert.equal(!result.ok && result.retryAfterSeconds, 30);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reports truncation when the pagination backstop stops the loop", async () => {
+    // Stopping at offset > 200_000 truncates the range exactly as the API's own cap
+    // does, and the caller has no other way to find out.
+    const originalFetch = globalThis.fetch;
+    let pages = 0;
+
+    globalThis.fetch = async () => {
+      pages += 1;
+      return new Response(
+        JSON.stringify({
+          movimenti: Array.from({ length: 250 }, () => ({
+            dataOperazione: "2026-01-02",
+            importo: 1,
+          })),
+          lastPage: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.data.limitedResult, true);
+      // The loop must actually stop rather than run forever.
+      assert.ok(
+        pages > 800 && pages < 810,
+        `stopped after ${String(pages)} pages`,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("logout", () => {
+  it("keeps the hardcoded index — it is session teardown, not a data path", async () => {
+    const originalFetch = globalThis.fetch;
+    let seen: Headers | undefined;
+
+    globalThis.fetch = async (_input, init) => {
+      seen = new Headers(init?.headers);
+      return new Response("", { status: 200 });
+    };
+
+    try {
+      await logout("session=test", () => {});
+      assert.equal(seen?.get("x-account-index"), "0");
+      assert.equal(seen?.get("x-dossier-index"), "0");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("fetchZeroCommissionEtfs", () => {
+  it("carries retryAfterSeconds out of a 429 like every other fetcher", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () =>
+      new Response("slow down", {
+        status: 429,
+        headers: { "retry-after": "60" },
+      });
+
+    try {
+      const result = await fetchZeroCommissionEtfs({});
+      assert.equal(!result.ok && result.retryAfterSeconds, 60);
     } finally {
       globalThis.fetch = originalFetch;
     }
