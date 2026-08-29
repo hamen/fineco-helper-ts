@@ -53,6 +53,40 @@ export const ORDER_MONITOR_FILTERS_URL =
 export const MOVEMENTS_URL =
   "https://private-api.finecobank.com/v2/private/accounts-and-cards/movements";
 
+export const DEFAULT_ACCOUNT_INDEX = "0";
+export const DEFAULT_DOSSIER_INDEX = "0";
+
+// Fineco enforces PSD2 Strong Customer Authentication on the movements endpoint: a
+// password-only session reads roughly the last 90 days and answers 451 beyond that.
+export const SCA_WINDOW_MESSAGE =
+  "Fineco refused this movements range (HTTP 451, Strong Customer Authentication). " +
+  "A password-only session reads roughly the last 90 days; an older range needs an " +
+  "interactive SCA step-up, which this tool cannot perform.";
+
+// Both legal Retry-After forms: delay-seconds, and an HTTP date. Anything else is
+// treated as absent — a guessed wait is worse than no wait at all.
+export function retryAfterSeconds(
+  response: Response,
+  now: number = Date.now(),
+): number | undefined {
+  const header = response.headers.get("retry-after");
+  if (!header) return undefined;
+
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
+
+  const when = Date.parse(trimmed);
+  if (Number.isNaN(when)) return undefined;
+  return Math.max(0, Math.round((when - now) / 1000));
+}
+
+function indexHeaders(config: Config): Record<string, string> {
+  return {
+    "X-Account-Index": config.accountIndex ?? DEFAULT_ACCOUNT_INDEX,
+    "X-Dossier-Index": config.dossierIndex ?? DEFAULT_DOSSIER_INDEX,
+  };
+}
+
 type CliCommand =
   | "portfolio"
   | "search-asset"
@@ -240,6 +274,8 @@ export type Config = {
   similarInstrumentsUrl: string;
   newsUrl: string;
   instrumentListUrl: string;
+  accountIndex?: string;
+  dossierIndex?: string;
   syntheticCookies: boolean;
 };
 
@@ -260,7 +296,13 @@ type OnePasswordItem = {
 
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; status?: number; authExpired?: boolean };
+  | {
+      ok: false;
+      error: string;
+      status?: number;
+      authExpired?: boolean;
+      retryAfterSeconds?: number;
+    };
 
 class UsageError extends Error {}
 
@@ -369,6 +411,7 @@ Commands:
   tax-minus-by-year     Fetch tax carry-forward minus residue grouped by tax year.
   order-monitor         Fetch order monitor transactions for an instrument type and day window.
   order-monitor-filters Fetch available order monitor status filters for an instrument type.
+  movements             Fetch current-account and card movements for an explicit YYYY-MM-DD date range.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -396,6 +439,24 @@ Examples:
   npm start -- order-monitor-filters --type equity --op-item Fineco
   npm start -- zero-commission-etfs EXUS
 `;
+}
+
+export type DateRangeResult =
+  | { ok: true; dateFrom: string; dateTo: string }
+  | { ok: false; error: string };
+
+// Returns a result rather than an MCP payload, so it stays usable from the CLI.
+export function parseDateRange(
+  dateFrom: string | undefined,
+  dateTo: string | undefined,
+): DateRangeResult {
+  if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
+    return { ok: false, error: "Dates must be in YYYY-MM-DD format." };
+  }
+  if (dateFrom > dateTo) {
+    return { ok: false, error: "date_from must be on or before date_to." };
+  }
+  return { ok: true, dateFrom, dateTo };
 }
 
 export function isIsoDate(value: string | undefined): value is string {
@@ -767,6 +828,8 @@ function buildConfig(
     newsUrl: process.env.FINECO_NEWS_URL ?? NEWS_URL,
     instrumentListUrl:
       process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
+    accountIndex: process.env.FINECO_ACCOUNT_INDEX ?? DEFAULT_ACCOUNT_INDEX,
+    dossierIndex: process.env.FINECO_DOSSIER_INDEX ?? DEFAULT_DOSSIER_INDEX,
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
 }
@@ -967,20 +1030,33 @@ export function toCsv(rows: Position[]): string {
   ].join("\n");
 }
 
+// One formula for both the shareable renderers and the JSON payload. Two would
+// drift, and the fixtures here carry `summary.show` but no `summary.total`, so a
+// second formula reading `total` alone would silently disagree.
+export function portfolioTotalMarketValue(summary: PositionsSummary): number {
+  const total = summary.summary?.show ?? summary.summary?.total ?? {};
+  return total.marketValue ?? 0;
+}
+
+export function positionWeightPerc(
+  position: Position,
+  totalMarketValue: number,
+): number | undefined {
+  return totalMarketValue > 0 && typeof position.marketValue === "number"
+    ? (position.marketValue / totalMarketValue) * 100
+    : undefined;
+}
+
 function shareableRows(
   summary: PositionsSummary,
 ): Array<Record<string, string>> {
   const rows = positionsAsRows(summary);
-  const total = summary.summary?.show ?? summary.summary?.total ?? {};
-  const totalMarketValue = total.marketValue ?? 0;
+  const totalMarketValue = portfolioTotalMarketValue(summary);
 
   return [...rows]
     .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
     .map((position) => {
-      const weight =
-        totalMarketValue > 0 && typeof position.marketValue === "number"
-          ? (position.marketValue / totalMarketValue) * 100
-          : undefined;
+      const weight = positionWeightPerc(position, totalMarketValue);
 
       return {
         description: String(position.description ?? ""),
@@ -1546,10 +1622,22 @@ export function renderOutput(
     return toRecordCsv(shareableRows(summary));
   }
 
+  const totalMarketValue = portfolioTotalMarketValue(summary);
+
   return JSON.stringify(
     {
+      capturedAt: new Date().toISOString(),
       summary: summary.summary,
-      rows,
+      // Copies, never the live Position objects: `positionsAsRows` hands back
+      // `summary.positions.show` by reference, and `toCsv` builds its header row
+      // from `Object.keys`, so an in-place field would leak a column into a later
+      // csv/html render of the same summary.
+      rows: rows.map((position) => {
+        const weightPerc = positionWeightPerc(position, totalMarketValue);
+        return weightPerc === undefined
+          ? { ...position }
+          : { ...position, weightPerc };
+      }),
       rowCount: rows.length,
     },
     null,
@@ -1586,8 +1674,7 @@ export async function fetchPositionsSummary(
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "X-Account-Index": "0",
-        "X-Dossier-Index": "0",
+        ...indexHeaders(config),
       },
     },
     cookie,
@@ -1599,11 +1686,16 @@ export async function fetchPositionsSummary(
   );
 
   if (!positions.response.ok) {
+    const retryAfter =
+      positions.response.status === 429
+        ? retryAfterSeconds(positions.response)
+        : undefined;
     return {
       ok: false,
       status: positions.response.status,
       authExpired:
         positions.response.status === 401 || positions.response.status === 403,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `Positions summary API failed: HTTP ${
         positions.response.status
       } ${body.slice(0, 500)}`,
@@ -1622,6 +1714,7 @@ export async function fetchPositionsSummary(
 
 async function fetchJsonApi<T>(
   url: string,
+  config: Config,
   cookie: string,
   debug: (message: string) => void,
   options: {
@@ -1644,8 +1737,7 @@ async function fetchJsonApi<T>(
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "X-Account-Index": "0",
-        "X-Dossier-Index": "0",
+        ...indexHeaders(config),
       },
       ...(options.body === undefined
         ? {}
@@ -1660,11 +1752,16 @@ async function fetchJsonApi<T>(
   );
 
   if (!response.response.ok) {
+    const retryAfter =
+      response.response.status === 429
+        ? retryAfterSeconds(response.response)
+        : undefined;
     return {
       ok: false,
       status: response.response.status,
       authExpired:
         response.response.status === 401 || response.response.status === 403,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `${options.label} failed: HTTP ${
         response.response.status
       } ${body.slice(0, 500)}`,
@@ -1690,7 +1787,7 @@ export async function searchAssets(
   const url = new URL(config.marketSearchUrl);
   url.searchParams.set("term", config.query);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Market search API",
     referer: "https://finecobank.com/pvt/home",
   });
@@ -1746,7 +1843,7 @@ export async function fetchAssetDetails(
     similar,
     news,
   ] = await Promise.all([
-    fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+    fetchJsonApi(config.assetDetailsUrl, config, cookie, debug, {
       label: "Asset details API",
       method: "POST",
       referer,
@@ -1756,31 +1853,31 @@ export async function fetchAssetDetails(
         withWarnings: true,
       },
     }),
-    fetchJsonApi(marketSnapshotUrl, cookie, debug, {
+    fetchJsonApi(marketSnapshotUrl, config, cookie, debug, {
       label: "Market snapshot API",
       referer,
     }),
-    fetchJsonApi(instrumentSnapshotUrl.toString(), cookie, debug, {
+    fetchJsonApi(instrumentSnapshotUrl.toString(), config, cookie, debug, {
       label: "Instrument snapshot API",
       referer,
     }),
-    fetchJsonApi(chartUrl.toString(), cookie, debug, {
+    fetchJsonApi(chartUrl.toString(), config, cookie, debug, {
       label: "Chart API",
       referer,
     }),
-    fetchJsonApi(linkedIndicesUrl, cookie, debug, {
+    fetchJsonApi(linkedIndicesUrl, config, cookie, debug, {
       label: "Linked indices API",
       referer,
     }),
-    fetchJsonApi(eventsUrl.toString(), cookie, debug, {
+    fetchJsonApi(eventsUrl.toString(), config, cookie, debug, {
       label: "Economic events API",
       referer,
     }),
-    fetchJsonApi(similarUrl.toString(), cookie, debug, {
+    fetchJsonApi(similarUrl.toString(), config, cookie, debug, {
       label: "Similar instruments API",
       referer,
     }),
-    fetchJsonApi(newsUrl.toString(), cookie, debug, {
+    fetchJsonApi(newsUrl.toString(), config, cookie, debug, {
       label: "News API",
       referer,
     }),
@@ -1799,13 +1896,13 @@ export async function fetchAssetDetails(
   const [relatedList, relatedStatic] =
     relatedKeys.length > 0
       ? await Promise.all([
-          fetchJsonApi(config.instrumentListUrl, cookie, debug, {
+          fetchJsonApi(config.instrumentListUrl, config, cookie, debug, {
             label: "Related instrument list API",
             method: "POST",
             referer,
             body: { instruments: relatedKeys },
           }),
-          fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+          fetchJsonApi(config.assetDetailsUrl, config, cookie, debug, {
             label: "Related static instruments API",
             method: "POST",
             referer,
@@ -1857,7 +1954,7 @@ export async function fetchMarketIndices(
   cookie: string,
   debug: (message: string) => void,
 ): Promise<ApiResult<unknown>> {
-  return fetchJsonApi(config.marketIndicesUrl, cookie, debug, {
+  return fetchJsonApi(config.marketIndicesUrl, config, cookie, debug, {
     label: "Market indices API",
     referer: "https://finecobank.com/pvt/trading/home",
   });
@@ -1876,7 +1973,7 @@ export async function fetchTaxCarryForward(
   url.searchParams.set("dateFrom", config.dateFrom);
   url.searchParams.set("dateTo", config.dateTo);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Tax carry-forward API",
     referer:
       "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
@@ -1888,7 +1985,7 @@ export async function fetchTaxMinusByYear(
   cookie: string,
   debug: (message: string) => void,
 ): Promise<ApiResult<unknown>> {
-  return fetchJsonApi(config.taxCarryForwardMinusUrl, cookie, debug, {
+  return fetchJsonApi(config.taxCarryForwardMinusUrl, config, cookie, debug, {
     label: "Tax minus by year API",
     referer:
       "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
@@ -1904,7 +2001,7 @@ export async function fetchOrderMonitor(
   url.searchParams.set("type", config.orderType);
   url.searchParams.set("days", String(config.orderDays));
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Order monitor API",
     referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
   });
@@ -1918,7 +2015,7 @@ export async function fetchOrderMonitorFilters(
   const url = new URL(config.orderMonitorFiltersUrl);
   url.searchParams.set("type", config.orderType);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Order monitor filters API",
     referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
   });
@@ -1952,6 +2049,7 @@ export type MovementsResult = {
   count: number;
   dateFrom: string;
   dateTo: string;
+  limitedResult: boolean;
   balanceAccountAtSearchDate?: number;
   balanceAccountAtMovement?: number;
 };
@@ -1972,25 +2070,38 @@ export async function fetchMovements(
   const limit = 250;
   const all: Movement[] = [];
   let offset = 0;
+  let limited = false;
   let balanceAtSearch: number | undefined;
   let balanceAtMovement: number | undefined;
 
   for (;;) {
-    const page = await fetchJsonApi<MovementsPage>(MOVEMENTS_URL, cookie, debug, {
-      label: "Movements API",
-      method: "POST",
-      referer: "https://finecobank.com/pvt/conto-corrente/saldo-e-movimenti",
-      body: {
-        dateFrom: dateFromIso,
-        dateTo: dateToIso,
-        offset,
-        limit,
-        keyword: "",
+    const page = await fetchJsonApi<MovementsPage>(
+      MOVEMENTS_URL,
+      config,
+      cookie,
+      debug,
+      {
+        label: "Movements API",
+        method: "POST",
+        referer: "https://finecobank.com/pvt/conto-corrente/saldo-e-movimenti",
+        body: {
+          dateFrom: dateFromIso,
+          dateTo: dateToIso,
+          offset,
+          limit,
+          keyword: "",
+        },
       },
-    });
-    if (!page.ok) return page;
+    );
+    if (!page.ok) {
+      // 451 here is always the SCA window, and the raw bank body does not say so.
+      return page.status === 451
+        ? { ...page, error: `${SCA_WINDOW_MESSAGE} (${page.error})` }
+        : page;
+    }
 
     const batch = page.data.movimenti ?? [];
+    if (page.data.limitedResult) limited = true;
     if (offset === 0) {
       balanceAtSearch = page.data.balanceAccountAtSearchDate;
       balanceAtMovement = page.data.balanceAccountAtMovement;
@@ -2002,7 +2113,11 @@ export async function fetchMovements(
 
     if (page.data.lastPage || batch.length === 0) break;
     offset += limit;
-    if (offset > 200_000) break; // safety backstop against a runaway loop
+    if (offset > 200_000) {
+      // Stopping early truncates the range just as surely as the API's own cap does.
+      limited = true;
+      break;
+    }
   }
 
   return {
@@ -2012,12 +2127,178 @@ export async function fetchMovements(
       count: all.length,
       dateFrom: config.dateFrom,
       dateTo: config.dateTo,
+      limitedResult: limited,
       ...(balanceAtSearch === undefined
         ? {}
         : { balanceAccountAtSearchDate: balanceAtSearch }),
       ...(balanceAtMovement === undefined
         ? {}
         : { balanceAccountAtMovement: balanceAtMovement }),
+    },
+  };
+}
+
+export type DividendKind = "dividend" | "remunerated_portfolio";
+
+export type DividendEvent = {
+  payDate: string;
+  security: string;
+  kind: DividendKind;
+  grossCents: number;
+  withholdingCents: number;
+  netCents: number;
+  unpaired?: "gross" | "withholding";
+};
+
+export type DividendReport = {
+  capturedAt: string;
+  dateFrom: string;
+  dateTo: string;
+  assumedCurrency: "EUR";
+  truncated: boolean;
+  events: DividendEvent[];
+  totals: {
+    grossCents: number;
+    withholdingCents: number;
+    netCents: number;
+    count: number;
+  };
+};
+
+// `causaleMovimento` is the stable key. `causale` is display text and lies: a
+// NVIDIA dividend arrives under "Dividendo Italia" too, so the code means
+// "dividend credit", not "Italian dividend".
+const DIVIDEND_LEGS: Record<
+  string,
+  { leg: "gross" | "withholding"; kind: DividendKind; prefix: string }
+> = {
+  DII: { leg: "gross", kind: "dividend", prefix: "Div.su " },
+  DIR: { leg: "withholding", kind: "dividend", prefix: "Rit.div.su " },
+  DER: { leg: "withholding", kind: "dividend", prefix: "Rit.div.su " },
+  DPR: {
+    leg: "gross",
+    kind: "remunerated_portfolio",
+    prefix: "Acc.div.Port.Rem. ",
+  },
+  RPR: {
+    leg: "withholding",
+    kind: "remunerated_portfolio",
+    prefix: "Add.rit.Port.Rem. ",
+  },
+};
+
+const UNLABELLED_SECURITY = "(unlabelled movement)";
+
+function toCents(amount: number | undefined): number {
+  return Math.round((amount ?? 0) * 100);
+}
+
+// Returns the security label when the description carries the known prefix, and
+// undefined otherwise. Never falls back to the whole description: that would put
+// every prefix-less row in one bucket and merge unrelated securities.
+function securityLabel(
+  description: string | undefined,
+  prefix: string,
+): string | undefined {
+  if (!description) return undefined;
+  const trimmed = description.trim();
+  return trimmed.startsWith(prefix)
+    ? trimmed.slice(prefix.length).trim()
+    : undefined;
+}
+
+export function dividendsFromMovements(
+  movements: Movement[],
+  meta: {
+    dateFrom: string;
+    dateTo: string;
+    capturedAt: string;
+    truncated?: boolean;
+  },
+): DividendReport {
+  type Group = {
+    payDate: string;
+    security: string;
+    kind: DividendKind;
+    grossCents: number;
+    withholdingCents: number;
+    sawGross: boolean;
+    sawWithholding: boolean;
+  };
+
+  const groups = new Map<string, Group>();
+
+  movements.forEach((movement, index) => {
+    const code = movement.causaleMovimento;
+    const leg = code === undefined ? undefined : DIVIDEND_LEGS[code];
+    if (!leg) return;
+
+    const label = securityLabel(movement.descrizione, leg.prefix);
+    // The grouping key only has to be unique and stable; `security` is what a
+    // caller reads. `progressivoMovimento` is optional too, so the last resort is
+    // the row index, which is unique by construction.
+    const key =
+      label ?? movement.progressivoMovimento ?? `row:${String(index)}`;
+    const groupKey = `${movement.dataOperazione}|${leg.kind}|${key}`;
+
+    const group = groups.get(groupKey) ?? {
+      payDate: movement.dataOperazione,
+      security: label ?? movement.progressivoMovimento ?? UNLABELLED_SECURITY,
+      kind: leg.kind,
+      grossCents: 0,
+      withholdingCents: 0,
+      sawGross: false,
+      sawWithholding: false,
+    };
+
+    if (leg.leg === "gross") {
+      // Signed on purpose: a reversal posts negative and must stay negative.
+      group.grossCents += toCents(movement.importo);
+      group.sawGross = true;
+    } else {
+      // Negated, not abs()'d: a normal withholding is a debit and becomes a
+      // positive charge, while a refund stays negative instead of flipping into one.
+      group.withholdingCents += -toCents(movement.importo);
+      group.sawWithholding = true;
+    }
+
+    groups.set(groupKey, group);
+  });
+
+  const events: DividendEvent[] = [...groups.values()].map((group) => ({
+    payDate: group.payDate,
+    security: group.security,
+    kind: group.kind,
+    grossCents: group.grossCents,
+    withholdingCents: group.withholdingCents,
+    netCents: group.grossCents - group.withholdingCents,
+    // Both flags matter. An orphan withholding without its gross understates
+    // income; an orphan gross is either an instrument with no withholding or a
+    // window that clipped the second leg, and nothing here can tell those apart.
+    ...(group.sawGross && group.sawWithholding
+      ? {}
+      : {
+          unpaired: group.sawGross
+            ? ("withholding" as const)
+            : ("gross" as const),
+        }),
+  }));
+
+  return {
+    capturedAt: meta.capturedAt,
+    dateFrom: meta.dateFrom,
+    dateTo: meta.dateTo,
+    assumedCurrency: "EUR",
+    truncated: meta.truncated ?? false,
+    events,
+    totals: {
+      grossCents: events.reduce((sum, event) => sum + event.grossCents, 0),
+      withholdingCents: events.reduce(
+        (sum, event) => sum + event.withholdingCents,
+        0,
+      ),
+      netCents: events.reduce((sum, event) => sum + event.netCents, 0),
+      count: events.length,
     },
   };
 }
@@ -2342,7 +2623,11 @@ async function main(): Promise<void> {
         config.outPath,
       );
     } else if (config.command === "movements") {
-      const movements = await fetchMovements(config, authenticatedCookie, debug);
+      const movements = await fetchMovements(
+        config,
+        authenticatedCookie,
+        debug,
+      );
       if (!movements.ok) throw new Error(movements.error);
       await emitOutput(renderJsonOutput(movements.data), config.outPath);
     } else {

@@ -12,8 +12,16 @@ import {
   fetchOrderMonitor,
   fetchOrderMonitorFilters,
   fetchTaxCarryForward,
+  fetchMovements,
+  fetchPositionsSummary,
   fetchTaxMinusByYear,
   isIsoDate,
+  dividendsFromMovements,
+  retryAfterSeconds,
+  renderOutput,
+  positionWeightPerc,
+  portfolioTotalMarketValue,
+  type Movement,
   type Config,
   type Position,
   type PositionsSummary,
@@ -727,5 +735,546 @@ describe("isIsoDate", () => {
     assert.equal(isIsoDate("2026-00-01"), false);
     assert.equal(isIsoDate("2026-13-01"), false);
     assert.equal(isIsoDate("2026-02-30"), false);
+  });
+});
+
+// A synthetic capture: real `causaleMovimento` codes and `descrizione` prefixes,
+// invented securities and round amounts.
+function movement(
+  causaleMovimento: string,
+  dataOperazione: string,
+  descrizione: string | undefined,
+  importo: number,
+  progressivoMovimento?: string,
+): Movement {
+  return {
+    dataOperazione,
+    importo,
+    causaleMovimento,
+    ...(descrizione === undefined ? {} : { descrizione }),
+    ...(progressivoMovimento === undefined ? {} : { progressivoMovimento }),
+  };
+}
+
+const META = {
+  dateFrom: "2026-01-01",
+  dateTo: "2026-03-31",
+  capturedAt: "2026-04-01T10:00:00.000Z",
+};
+
+describe("dividendsFromMovements", () => {
+  it("pairs an Italian dividend with its withholding", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 200),
+        movement("DIR", "2026-02-10", "Rit.div.su 100,000 EXAMPLE SPA", -52),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    const event = report.events[0]!;
+    assert.equal(event.security, "100,000 EXAMPLE SPA");
+    assert.equal(event.kind, "dividend");
+    assert.equal(event.grossCents, 20000);
+    assert.equal(event.withholdingCents, 5200);
+    assert.equal(event.netCents, 14800);
+    assert.equal(event.unpaired, undefined);
+    assert.equal(report.totals.netCents, 14800);
+    assert.equal(report.assumedCurrency, "EUR");
+    assert.equal(report.capturedAt, META.capturedAt);
+  });
+
+  it("pairs a foreign withholding, which arrives under DER", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-03-05", "Div.su 4,000 EXAMPLE CORP", 1),
+        movement("DER", "2026-03-05", "Rit.div.su 4,000 EXAMPLE CORP", -0.15),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    assert.equal(report.events[0]!.grossCents, 100);
+    assert.equal(report.events[0]!.withholdingCents, 15);
+    assert.equal(report.events[0]!.netCents, 85);
+  });
+
+  it("pairs a remunerated-portfolio dividend separately from a plain one", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DPR", "2026-02-20", "Acc.div.Port.Rem. EXAMPLE SPA", 40),
+        movement("RPR", "2026-02-20", "Add.rit.Port.Rem. EXAMPLE SPA", -10.4),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    assert.equal(report.events[0]!.kind, "remunerated_portfolio");
+    assert.equal(report.events[0]!.netCents, 2960);
+  });
+
+  it("flags a withholding whose gross leg is outside the range", () => {
+    const report = dividendsFromMovements(
+      [movement("DIR", "2026-01-05", "Rit.div.su 100,000 EXAMPLE SPA", -52)],
+      META,
+    );
+
+    assert.equal(report.events[0]!.unpaired, "gross");
+    assert.equal(report.events[0]!.grossCents, 0);
+    assert.equal(report.events[0]!.netCents, -5200);
+  });
+
+  it("flags a gross with no withholding — ambiguous, so it is not asserted away", () => {
+    const report = dividendsFromMovements(
+      [movement("DII", "2026-01-05", "Div.su 10,000 EXAMPLE ETF", 30)],
+      META,
+    );
+
+    assert.equal(report.events[0]!.unpaired, "withholding");
+    assert.equal(report.events[0]!.withholdingCents, 0);
+    assert.equal(report.events[0]!.netCents, 3000);
+  });
+
+  it("keeps a dividend reversal negative instead of counting it as income", () => {
+    const report = dividendsFromMovements(
+      [movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", -200)],
+      META,
+    );
+
+    assert.equal(report.events[0]!.grossCents, -20000);
+    assert.equal(report.events[0]!.netCents, -20000);
+  });
+
+  it("keeps a withholding refund negative instead of counting it as tax", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 200),
+        movement("DIR", "2026-02-10", "Rit.div.su 100,000 EXAMPLE SPA", 52),
+      ],
+      META,
+    );
+
+    assert.equal(report.events[0]!.withholdingCents, -5200);
+    assert.equal(report.events[0]!.netCents, 25200);
+  });
+
+  it("sums two rows for one security on one day", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 200),
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 50),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    assert.equal(report.events[0]!.grossCents, 25000);
+  });
+
+  it("keeps the same security on different days apart", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100,000 EXAMPLE SPA", 200),
+        movement("DII", "2026-03-10", "Div.su 100,000 EXAMPLE SPA", 200),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
+  });
+
+  it("excludes interest and its withholding", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("IPR", "2026-02-01", "Interessi Portaf. Remun.", 0.28),
+        movement(
+          "RPI",
+          "2026-02-01",
+          "Rit. Fisc. Interessi Portaf.Remun.",
+          -0.07,
+        ),
+      ],
+      META,
+    );
+
+    assert.deepEqual(report.events, []);
+    assert.equal(report.totals.count, 0);
+  });
+
+  it("never merges two unlabelled rows into one security", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", undefined, 200),
+        movement("DII", "2026-02-10", undefined, 50),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
+    assert.equal(report.events[0]!.security, "(unlabelled movement)");
+  });
+
+  it("falls back to progressivoMovimento when the description has no known prefix", () => {
+    const report = dividendsFromMovements(
+      [movement("DII", "2026-02-10", "Something unexpected", 200, "PM-7")],
+      META,
+    );
+
+    assert.equal(report.events[0]!.security, "PM-7");
+  });
+
+  it("echoes the requested range on an empty result", () => {
+    const report = dividendsFromMovements([], META);
+
+    assert.equal(report.dateFrom, "2026-01-01");
+    assert.equal(report.dateTo, "2026-03-31");
+    assert.deepEqual(report.totals, {
+      grossCents: 0,
+      withholdingCents: 0,
+      netCents: 0,
+      count: 0,
+    });
+  });
+
+  it("propagates truncation", () => {
+    assert.equal(
+      dividendsFromMovements([], { ...META, truncated: true }).truncated,
+      true,
+    );
+    assert.equal(dividendsFromMovements([], META).truncated, false);
+  });
+});
+
+describe("retryAfterSeconds", () => {
+  const withHeader = (value?: string) =>
+    new Response("", {
+      status: 429,
+      ...(value === undefined ? {} : { headers: { "retry-after": value } }),
+    });
+
+  it("reads the delay-seconds form", () => {
+    assert.equal(retryAfterSeconds(withHeader("30")), 30);
+  });
+
+  it("reads the HTTP-date form", () => {
+    const now = Date.parse("2026-04-01T10:00:00.000Z");
+    assert.equal(
+      retryAfterSeconds(withHeader("Wed, 01 Apr 2026 10:00:45 GMT"), now),
+      45,
+    );
+  });
+
+  it("never returns a negative wait for a date already past", () => {
+    const now = Date.parse("2026-04-01T10:01:00.000Z");
+    assert.equal(
+      retryAfterSeconds(withHeader("Wed, 01 Apr 2026 10:00:00 GMT"), now),
+      0,
+    );
+  });
+
+  it("returns undefined rather than guessing", () => {
+    assert.equal(retryAfterSeconds(withHeader()), undefined);
+    assert.equal(retryAfterSeconds(withHeader("soon")), undefined);
+  });
+});
+
+function testConfig(overrides: Partial<Config> = {}): Config {
+  return {
+    userId: "test",
+    password: "test",
+    debug: false,
+    command: "portfolio",
+    query: undefined,
+    dateFrom: undefined,
+    dateTo: undefined,
+    orderType: "equity",
+    orderDays: 0,
+    output: "json",
+    outPath: undefined,
+    positionsUrl: "https://example.test/positions",
+    marketSearchUrl: "https://example.test/search",
+    assetDetailsUrl: "https://example.test/details",
+    marketIndicesUrl: "https://example.test/indices",
+    taxCarryForwardUrl: "https://example.test/tax-carry-forward/search",
+    taxCarryForwardMinusUrl: "https://example.test/tax-carry-forward/minus",
+    orderMonitorUrl: "https://example.test/transactions",
+    orderMonitorFiltersUrl: "https://example.test/monitor-filters",
+    snapshotUrl: "https://example.test/snapshot",
+    instrumentSnapshotUrl: "https://example.test/instrument-snapshot",
+    chartDataUrl: "https://example.test/chart",
+    linkedIndicesUrl: "https://example.test/linked-indices",
+    economicEventsUrl: "https://example.test/events",
+    similarInstrumentsUrl: "https://example.test/similar",
+    newsUrl: "https://example.test/news",
+    instrumentListUrl: "https://example.test/instrument-list",
+    syntheticCookies: true,
+    ...overrides,
+  };
+}
+
+const weightSummary: PositionsSummary = {
+  positions: {
+    show: [
+      { instrId: "AAA", description: "Alpha", marketValue: 250 },
+      { instrId: "BBB", description: "Beta", marketValue: 750 },
+    ],
+  },
+  summary: { show: { marketValue: 1000 } },
+};
+
+describe("renderOutput json", () => {
+  it("stamps an ISO capturedAt", () => {
+    const payload = JSON.parse(renderOutput(weightSummary, "json")) as {
+      capturedAt: string;
+    };
+
+    assert.ok(!Number.isNaN(Date.parse(payload.capturedAt)));
+  });
+
+  it("adds weightPerc per row", () => {
+    const payload = JSON.parse(renderOutput(weightSummary, "json")) as {
+      rows: Array<{ instrId?: string; weightPerc?: number }>;
+    };
+
+    assert.equal(payload.rows[0]!.weightPerc, 25);
+    assert.equal(payload.rows[1]!.weightPerc, 75);
+  });
+
+  it("leaves weightPerc undefined when the total is missing or zero", () => {
+    const noTotal: PositionsSummary = {
+      positions: { show: [{ instrId: "AAA", marketValue: 250 }] },
+      summary: { show: { marketValue: 0 } },
+    };
+    const payload = JSON.parse(renderOutput(noTotal, "json")) as {
+      rows: Array<{ weightPerc?: number }>;
+    };
+
+    assert.equal(payload.rows[0]!.weightPerc, undefined);
+  });
+
+  it("agrees with the shareable renderer for the same position", () => {
+    // Matched by instrId, never by row index: shareableRows sorts by market value
+    // descending while the json branch keeps the original order.
+    const payload = JSON.parse(renderOutput(weightSummary, "json")) as {
+      rows: Array<{ instrId?: string; weightPerc?: number }>;
+    };
+    const csv = renderOutput(weightSummary, "shareable-csv");
+
+    const headers = csv.split("\n")[0]!.split(",");
+    const weightColumn = headers.findIndex((header) =>
+      header.toLowerCase().includes("weight"),
+    );
+    assert.ok(weightColumn >= 0, "shareable csv should carry a weight column");
+
+    const alphaRow = csv
+      .split("\n")
+      .slice(1)
+      .find((line) => line.includes("Alpha"))!;
+    const alphaJson = payload.rows.find((row) => row.instrId === "AAA")!;
+
+    assert.ok(
+      alphaRow
+        .split(",")
+        [weightColumn]!.startsWith(String(Math.trunc(alphaJson.weightPerc!))),
+    );
+  });
+
+  it("does not leak weightPerc into a later csv render of the same summary", () => {
+    // positionsAsRows returns summary.positions.show by reference, and toCsv builds
+    // its header row from Object.keys — an in-place assign would add a column here.
+    const before = renderOutput(weightSummary, "csv").split("\n")[0];
+    renderOutput(weightSummary, "json");
+    const after = renderOutput(weightSummary, "csv").split("\n")[0];
+
+    assert.equal(after, before);
+    assert.ok(!after!.includes("weightPerc"));
+  });
+});
+
+describe("account and dossier index headers", () => {
+  const okJson = () =>
+    new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("sends the resolved index on the positions path", async () => {
+    const originalFetch = globalThis.fetch;
+    let seen: Headers | undefined;
+
+    globalThis.fetch = async (_input, init) => {
+      seen = new Headers(init?.headers);
+      return okJson();
+    };
+
+    try {
+      await fetchPositionsSummary(
+        testConfig({ accountIndex: "2", dossierIndex: "3" }),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(seen?.get("x-account-index"), "2");
+      assert.equal(seen?.get("x-dossier-index"), "3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends the resolved index on the shared JSON path used by movements", async () => {
+    const originalFetch = globalThis.fetch;
+    let seen: Headers | undefined;
+
+    globalThis.fetch = async (_input, init) => {
+      seen = new Headers(init?.headers);
+      return new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      await fetchMovements(
+        testConfig({
+          dateFrom: "2026-01-01",
+          dateTo: "2026-01-31",
+          accountIndex: "4",
+          dossierIndex: "5",
+        }),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(seen?.get("x-account-index"), "4");
+      assert.equal(seen?.get("x-dossier-index"), "5");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to 0 when the config carries no index", async () => {
+    const originalFetch = globalThis.fetch;
+    let seen: Headers | undefined;
+
+    globalThis.fetch = async (_input, init) => {
+      seen = new Headers(init?.headers);
+      return okJson();
+    };
+
+    try {
+      await fetchPositionsSummary(testConfig(), "session=test", () => {});
+      assert.equal(seen?.get("x-account-index"), "0");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("fetchMovements", () => {
+  const range = { dateFrom: "2026-01-01", dateTo: "2026-01-31" };
+
+  it("reports truncation when any page is limited", async () => {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = async () => {
+      call += 1;
+      const body =
+        call === 1
+          ? {
+              movimenti: Array.from({ length: 250 }, () => ({
+                dataOperazione: "2026-01-02",
+                importo: 1,
+              })),
+              lastPage: false,
+              limitedResult: true,
+            }
+          : { movimenti: [], lastPage: true };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.data.limitedResult, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reports no truncation for a complete range", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(result.ok && result.data.limitedResult, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("explains the SCA window on HTTP 451 instead of passing the raw body through", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () =>
+      new Response("Sca di sessione non valida", { status: 451 });
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(result.ok, false);
+      assert.ok(!result.ok && result.error.includes("90 days"));
+      assert.ok(
+        !result.ok && result.error.includes("Sca di sessione non valida"),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("carries retryAfterSeconds out of a 429", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () =>
+      new Response("slow down", {
+        status: 429,
+        headers: { "retry-after": "30" },
+      });
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(!result.ok && result.retryAfterSeconds, 30);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

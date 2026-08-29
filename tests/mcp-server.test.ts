@@ -31,8 +31,10 @@ describe("MCP server", () => {
         "fineco_session_status",
         "generate_report",
         "get_asset_details",
+        "get_dividends",
         "get_enrichment",
         "get_market_indices",
+        "get_movements",
         "get_order_monitor",
         "get_order_monitor_filters",
         "get_portfolio",
@@ -41,7 +43,7 @@ describe("MCP server", () => {
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 13);
+      assert.equal(tools.length, 15);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
