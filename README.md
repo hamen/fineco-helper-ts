@@ -167,6 +167,10 @@ which this tool cannot perform.
 `get_portfolio`, `generate_report`, `get_movements` and `get_dividends` accept
 optional `account_index` and `dossier_index` parameters for a non-default Fineco
 account or dossier. There is no tool to list them: no endpoint for that is known.
+The `FINECO_ACCOUNT_INDEX` / `FINECO_DOSSIER_INDEX` environment variables are not
+limited to those four tools: they set the headers on every private JSON call the
+helper makes, search and tax and order data included. Only the per-call
+parameters are tool-scoped.
 
 When Fineco answers HTTP 429, the error payload carries `status` and, when the
 response says so, `retryAfterSeconds` — parsed from either legal form of the

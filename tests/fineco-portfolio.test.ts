@@ -1408,6 +1408,30 @@ describe("fetchMovements", () => {
     }
   });
 
+  // The range is what decides which rows come back at all, and nothing asserted
+  // the strings that go on the wire.
+  it("sends the range as inclusive UTC day boundaries", async () => {
+    const originalFetch = globalThis.fetch;
+    let body: { dateFrom?: string; dateTo?: string; limit?: number } = {};
+
+    globalThis.fetch = async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      await fetchMovements(testConfig(range), "session=test", () => {});
+
+      assert.equal(body.dateFrom, "2026-01-01T00:00:00.000Z");
+      assert.equal(body.dateTo, "2026-01-31T23:59:59.999Z");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reports no truncation for a complete range", async () => {
     const originalFetch = globalThis.fetch;
 
@@ -1601,6 +1625,16 @@ describe("envIndex", () => {
     for (const bad of ["abc", "-1", "1.5", "0x1", "1 2"]) {
       assert.throws(() => envIndex(bad, "0"), /non-negative integer/);
     }
+  });
+
+  // All digits, and still not the number that was asked for: 2^53 + 1 parses to
+  // 2^53, which is a different index.
+  it("rejects an integer too large to represent exactly", () => {
+    assert.throws(
+      () => envIndex("9007199254740993", "0"),
+      /too large to represent exactly/,
+    );
+    assert.equal(envIndex("9007199254740991", "0"), "9007199254740991");
   });
 });
 

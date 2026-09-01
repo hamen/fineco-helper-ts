@@ -490,7 +490,14 @@ function parseNonNegativeInteger(
   if (!value || !/^\d+$/.test(value)) {
     throw new UsageError(`${label} must be a non-negative integer.`);
   }
-  return Number(value);
+  const parsed = Number(value);
+  // Past 2^53 the digits still look like an integer but the parse is lossy:
+  // "9007199254740993" becomes 9007199254740992 and would select a different
+  // index than the one that was asked for.
+  if (!Number.isSafeInteger(parsed)) {
+    throw new UsageError(`${label} is too large to represent exactly.`);
+  }
+  return parsed;
 }
 
 export function parseArgs(argv: string[]): CliArgs {

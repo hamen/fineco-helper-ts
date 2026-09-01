@@ -322,6 +322,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
@@ -330,6 +331,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
@@ -382,6 +384,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
@@ -390,6 +393,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
@@ -455,6 +459,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
@@ -463,6 +468,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
@@ -500,6 +506,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
@@ -508,6 +515,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe(
           "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
@@ -652,6 +660,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe("Number of days to include. Default: 0."),
     },
