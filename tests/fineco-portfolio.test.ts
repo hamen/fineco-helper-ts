@@ -784,6 +784,56 @@ describe("dividendsFromMovements", () => {
     );
   });
 
+  it("refuses a missing amount instead of posting a zero-value dividend", () => {
+    assert.throws(
+      () =>
+        dividendsFromMovements(
+          [
+            {
+              ...movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 0),
+              importo: undefined as unknown as number,
+            },
+          ],
+          META,
+        ),
+      /unreadable importo/,
+    );
+  });
+
+  it("reads a label whose prefix arrives in a different case", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "DIV.SU 100,000 EXAMPLE SPA", 10),
+        movement("DIR", "2026-02-10", "RIT.DIV.SU 100,000 EXAMPLE SPA", -2),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    assert.equal(report.events[0]!.security, "100,000 EXAMPLE SPA");
+    assert.equal(report.events[0]!.netCents, 800);
+  });
+
+  // Documents the known limit rather than hiding it: the group key carries the
+  // operation date, so legs posted on different days stay apart. The totals are
+  // still right; the per-event split is not.
+  it("leaves legs posted on different days unpaired", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 10),
+        movement("DIR", "2026-02-11", "Rit.div.su 100 EXAMPLE SPA", -2),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 2);
+    assert.deepEqual(report.events.map((event) => event.unpaired).sort(), [
+      "gross",
+      "withholding",
+    ]);
+    assert.equal(report.totals.netCents, 800);
+  });
+
   it("pairs an Italian dividend with its withholding", () => {
     // Amounts with real cents, not round numbers: they are what exercises the
     // Math.round path, where a float would drift.

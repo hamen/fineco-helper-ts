@@ -461,3 +461,37 @@ describe("MCP calendar dates", () => {
     assert.match(result.content[0]!.text, /must (use|be in) YYYY-MM-DD format/);
   });
 });
+
+describe("MCP index env misconfiguration", () => {
+  // envIndex throws on a non-integer value, and buildConfig runs outside the
+  // handler's try. The SDK still turns that into an isError tool result rather
+  // than a protocol error, and this pins that: the caller must be told what is
+  // wrong with its configuration, and no request may go out.
+  for (const tool of ["get_portfolio", "get_movements"]) {
+    it(`reports a bad FINECO_ACCOUNT_INDEX as a tool error from ${tool}`, async () => {
+      const original = process.env.FINECO_ACCOUNT_INDEX;
+      process.env.FINECO_ACCOUNT_INDEX = "abc";
+      let reachedNetwork = false;
+
+      try {
+        const result = await callTool(
+          tool,
+          tool === "get_movements" ? RANGE : {},
+          () => {
+            reachedNetwork = true;
+            return new Response(
+              JSON.stringify({ movimenti: [], lastPage: true }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            );
+          },
+        );
+
+        assert.equal(reachedNetwork, false);
+        assert.match(result.content[0]!.text, /non-negative integer/);
+      } finally {
+        if (original === undefined) delete process.env.FINECO_ACCOUNT_INDEX;
+        else process.env.FINECO_ACCOUNT_INDEX = original;
+      }
+    });
+  }
+});

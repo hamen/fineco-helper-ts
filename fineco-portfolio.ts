@@ -86,8 +86,9 @@ export function retryAfterSeconds(
 // through and send a blank header, which is a misconfiguration nobody would see.
 // A non-numeric value is worse: it reaches the bank verbatim in `X-Account-Index`,
 // while the MCP path validates the same field as a non-negative integer. Throwing
-// keeps the two paths symmetric and makes the typo visible at startup instead of
-// on the wire.
+// keeps the two paths symmetric and makes the typo visible before the request
+// goes out rather than on the wire. The CLI fails at startup; the MCP server
+// builds its config per call, so there it surfaces as a tool error.
 export function envIndex(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
   if (!trimmed) return fallback;
@@ -410,6 +411,7 @@ function usage(): string {
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- tax-minus-by-year USER PASSWORD [--out path]
   npm start -- tax-minus-by-year --op-item "Fineco" [--out path]
+  npm start -- movements DATE_FROM DATE_TO USER PASSWORD [--out path]
   npm start -- movements DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- order-monitor [--type equity] [--days 0] --op-item "Fineco" [--out path]
   npm start -- order-monitor-filters [--type equity] --op-item "Fineco" [--out path]
@@ -426,6 +428,7 @@ Commands:
   order-monitor         Fetch order monitor transactions for an instrument type and day window.
   order-monitor-filters Fetch available order monitor status filters for an instrument type.
   movements             Fetch current-account and card movements for an explicit YYYY-MM-DD date range.
+                        Ranges past roughly 90 days need Strong Customer Authentication and fail with HTTP 451.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -2089,6 +2092,12 @@ export async function fetchMovements(
   if (!config.dateFrom || !config.dateTo) {
     throw new Error("Missing movements date range.");
   }
+  // Sent as UTC instants because that is the shape the endpoint expects. The bank
+  // reports in Europe/Rome, so if it ever compared these as instants rather than
+  // as calendar days, a boundary-day row could land outside the window. Every
+  // range observed so far comes back with both boundary days whole, which is what
+  // a naive-date comparison looks like — but this is an observation, not a
+  // documented guarantee.
   const dateFromIso = `${config.dateFrom}T00:00:00.000Z`;
   const dateToIso = `${config.dateTo}T23:59:59.999Z`;
   const limit = 250;
@@ -2226,9 +2235,9 @@ const UNLABELLED_SECURITY = "(unlabelled movement)";
 function toCents(amount: number | undefined): number {
   // `importo` is typed as a number but comes from an untyped bank response. A
   // string or null would make `Math.round` return NaN, which then spreads through
-  // every total silently. On a money path a loud stop beats a wrong number.
-  if (amount === undefined) return 0;
-  if (!Number.isFinite(amount)) {
+  // every total silently, and a missing one would post a dividend worth zero.
+  // On a money path a loud stop beats a wrong number.
+  if (amount === undefined || !Number.isFinite(amount)) {
     throw new Error(
       `Movement has an unreadable importo: ${JSON.stringify(amount)}.`,
     );
@@ -2245,7 +2254,10 @@ function securityLabel(
 ): string | undefined {
   if (!description) return undefined;
   const trimmed = description.trim();
-  if (!trimmed.startsWith(prefix)) return undefined;
+  // Case-insensitive: a casing change in the bank's descriptions would otherwise
+  // demote every row to the progressivo fallback, and nothing in the output
+  // would say the labels had stopped resolving.
+  if (!trimmed.toLowerCase().startsWith(prefix.toLowerCase())) return undefined;
   // A description that is nothing but the prefix parses to "", which is not a
   // label. Returning it would put a blank `security` in the report and let two
   // unrelated blank rows share a group key.

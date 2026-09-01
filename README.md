@@ -72,7 +72,17 @@ Authentication):
 
 ```sh
 npm start -- movements 2026-01-01 2026-01-31 --op-item "Fineco"
+npm start -- movements 2026-01-01 2026-01-31 "your-user-id" "your-password"
 ```
+
+Both boundary dates are inclusive. The range is sent to the bank as UTC instants
+while the bank reports in Europe/Rome; observed ranges return both boundary days
+whole, which is how a naive-date comparison behaves, but the endpoint does not
+document this.
+
+Dividend pairing groups a gross leg with its withholding by operation date and
+security label. Legs that the bank posts on different days stay apart, each
+marked `unpaired`: the totals are still right, the per-event split is not.
 
 Fetch tax carry-forward data for an explicit date range:
 
