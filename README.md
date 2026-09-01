@@ -71,9 +71,13 @@ last 90 days; older ranges fail with HTTP 451 because of Strong Customer
 Authentication):
 
 ```sh
-npm start -- movements 2026-01-01 2026-01-31 --op-item "Fineco"
-npm start -- movements 2026-01-01 2026-01-31 "your-user-id" "your-password"
+npm start -- movements 2026-08-01 2026-08-31 --op-item "Fineco"
+npm start -- movements 2026-08-01 2026-08-31 "your-user-id" "your-password"
 ```
+
+The dates above are only an example. Pick a range inside the SCA window — a
+fixed range in a README goes stale and starts returning HTTP 451 the moment it
+falls outside the last 90 days.
 
 Both boundary dates are inclusive. The range is sent to the bank as UTC instants
 while the bank reports in Europe/Rome; observed ranges return both boundary days
