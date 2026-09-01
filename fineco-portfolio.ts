@@ -73,7 +73,13 @@ export function retryAfterSeconds(
   if (!header) return undefined;
 
   const trimmed = header.trim();
-  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    // A header of 400 digits parses to Infinity, which JSON writes as `null` and
+    // breaks the numeric contract the MCP payload advertises. Anything past the
+    // safe range is not a wait a caller could honour anyway.
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
 
   const when = Date.parse(trimmed);
   if (Number.isNaN(when)) return undefined;
@@ -2112,6 +2118,7 @@ export async function fetchMovements(
   let offset = 0;
   let requests = 0;
   let limited = false;
+  let previousFirstRow: string | undefined;
   let balanceAtSearch: number | undefined;
   let balanceAtMovement: number | undefined;
 
@@ -2143,6 +2150,17 @@ export async function fetchMovements(
     }
 
     const batch = page.data.movimenti ?? [];
+    // A server that ignores `offset` — or a proxy serving a cached page — would
+    // hand back rows already collected while the loop kept advancing, and every
+    // total downstream would silently double. Checked before the rows are kept,
+    // so the repeat is dropped rather than counted, and the result says the range
+    // is incomplete instead of reporting inflated money.
+    const firstRow = batch.length === 0 ? undefined : JSON.stringify(batch[0]);
+    if (firstRow !== undefined && firstRow === previousFirstRow) {
+      limited = true;
+      break;
+    }
+    previousFirstRow = firstRow;
     if (page.data.limitedResult) limited = true;
     if (offset === 0) {
       balanceAtSearch = page.data.balanceAccountAtSearchDate;
@@ -2696,7 +2714,15 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!movements.ok) throw new Error(movements.error);
+      if (!movements.ok) {
+        // The MCP tool returns retryAfterSeconds; dropping it here left the CLI
+        // unable to wait the interval the bank actually advertised.
+        throw new Error(
+          movements.retryAfterSeconds === undefined
+            ? movements.error
+            : `${movements.error} Retry after ${String(movements.retryAfterSeconds)}s.`,
+        );
+      }
       await emitOutput(renderJsonOutput(movements.data), config.outPath);
     } else {
       const exhaustiveCheck: never = config.command;

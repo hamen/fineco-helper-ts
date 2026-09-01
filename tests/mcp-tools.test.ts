@@ -236,7 +236,8 @@ describe("MCP per-call account and dossier index", () => {
 
   it("reaches the wire from generate_report", async () => {
     const seen: { value?: Headers } = {};
-    const reportPath = join(await mkdtemp(join(tmpdir(), "fineco-")), "r.html");
+    const reportDir = await mkdtemp(join(tmpdir(), "fineco-"));
+    const reportPath = join(reportDir, "r.html");
 
     try {
       await callTool(
@@ -254,7 +255,8 @@ describe("MCP per-call account and dossier index", () => {
       assert.equal(seen.value?.get("x-dossier-index"), "9");
     } finally {
       // This tool writes a real file; a header check should not leave one behind.
-      await rm(reportPath, { force: true });
+      // The file alone left the mkdtemp directory behind on every run.
+      await rm(reportDir, { recursive: true, force: true });
     }
   });
 

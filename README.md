@@ -82,7 +82,10 @@ document this.
 
 Dividend pairing groups a gross leg with its withholding by operation date and
 security label. Legs that the bank posts on different days stay apart, each
-marked `unpaired`: the totals are still right, the per-event split is not.
+marked `unpaired`: the totals are still right, the per-event split is not. The
+same key has the mirror limitation: two separate payments of the same security
+on the same day merge into one event with summed amounts. Totals stay right in
+that case too.
 
 Fetch tax carry-forward data for an explicit date range:
 

@@ -18,6 +18,7 @@ import {
   fetchPositionsSummary,
   fetchTaxMinusByYear,
   isIsoDate,
+  parseDateRange,
   dividendsFromMovements,
   retryAfterSeconds,
   renderOutput,
@@ -834,6 +835,25 @@ describe("dividendsFromMovements", () => {
     assert.equal(report.totals.netCents, 800);
   });
 
+  // The mirror of the cross-day case, and the same group key causes it: two real
+  // payments of one security on one day cannot be told apart. Totals stay right.
+  it("merges two same-day payments of the same security into one event", () => {
+    const report = dividendsFromMovements(
+      [
+        movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 10),
+        movement("DIR", "2026-02-10", "Rit.div.su 100 EXAMPLE SPA", -2),
+        movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 5),
+        movement("DIR", "2026-02-10", "Rit.div.su 100 EXAMPLE SPA", -1),
+      ],
+      META,
+    );
+
+    assert.equal(report.events.length, 1);
+    assert.equal(report.events[0]!.grossCents, 1500);
+    assert.equal(report.events[0]!.withholdingCents, 300);
+    assert.equal(report.totals.netCents, 1200);
+  });
+
   it("pairs an Italian dividend with its withholding", () => {
     // Amounts with real cents, not round numbers: they are what exercises the
     // Math.round path, where a float would drift.
@@ -1075,6 +1095,17 @@ describe("retryAfterSeconds", () => {
       status: 429,
       ...(value === undefined ? {} : { headers: { "retry-after": value } }),
     });
+
+  // JSON writes Infinity as null, so a header long enough to overflow would break
+  // the numeric contract the MCP payload advertises for this field.
+  it("ignores a delay past the safe integer range", () => {
+    assert.equal(retryAfterSeconds(withHeader("9".repeat(400))), undefined);
+    assert.equal(retryAfterSeconds(withHeader("9007199254740993")), undefined);
+    assert.equal(
+      retryAfterSeconds(withHeader("9007199254740991")),
+      9007199254740991,
+    );
+  });
 
   it("reads the delay-seconds form", () => {
     assert.equal(retryAfterSeconds(withHeader("30")), 30);
@@ -1432,6 +1463,42 @@ describe("fetchMovements", () => {
     }
   });
 
+  // A server that ignores `offset`, or a cache in front of it, would otherwise
+  // hand back the same page until the request cap and double every total.
+  it("stops and reports truncation when a page repeats", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          movimenti: Array.from({ length: 250 }, (_unused, row) => ({
+            dataOperazione: "2026-01-02",
+            importo: 1,
+            progressivoMovimento: `row-${String(row)}`,
+          })),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      // Two requests: the first page, then the repeat that ends the loop.
+      assert.equal(calls, 2);
+      assert.equal(result.ok && result.data.count, 250);
+      assert.equal(result.ok && result.data.limitedResult, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reports no truncation for a complete range", async () => {
     const originalFetch = globalThis.fetch;
 
@@ -1509,7 +1576,13 @@ describe("fetchMovements", () => {
       pages += 1;
       return new Response(
         JSON.stringify({
-          movimenti: [{ dataOperazione: "2026-01-02", importo: 1 }],
+          movimenti: [
+            {
+              dataOperazione: "2026-01-02",
+              importo: 1,
+              progressivoMovimento: `row-${String(pages)}`,
+            },
+          ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -1539,9 +1612,10 @@ describe("fetchMovements", () => {
       pages += 1;
       return new Response(
         JSON.stringify({
-          movimenti: Array.from({ length: 250 }, () => ({
+          movimenti: Array.from({ length: 250 }, (_unused, row) => ({
             dataOperazione: "2026-01-02",
             importo: 1,
+            progressivoMovimento: `page-${String(pages)}-row-${String(row)}`,
           })),
           lastPage: false,
         }),
@@ -1720,5 +1794,46 @@ describe("parseArgs movements", () => {
         ]),
       /only supported by portfolio/,
     );
+  });
+});
+
+describe("parseDateRange", () => {
+  it("accepts a valid range and returns both ends", () => {
+    const range = parseDateRange("2026-01-01", "2026-01-31");
+
+    assert.equal(range.ok, true);
+    assert.equal(range.ok && range.dateFrom, "2026-01-01");
+    assert.equal(range.ok && range.dateTo, "2026-01-31");
+  });
+
+  it("accepts a single-day range", () => {
+    const range = parseDateRange("2026-01-31", "2026-01-31");
+    assert.equal(range.ok, true);
+  });
+
+  it("rejects a day that does not exist", () => {
+    // The shape check passes; only the round-trip through Date catches this.
+    for (const bad of ["2026-02-30", "2026-13-01", "2025-02-29"]) {
+      const range = parseDateRange(bad, "2026-12-31");
+      assert.equal(range.ok, false);
+      assert.match(
+        !range.ok ? range.error : "",
+        /must be in YYYY-MM-DD format/,
+      );
+    }
+  });
+
+  it("rejects a malformed or missing value", () => {
+    for (const bad of [undefined, "", "01-01-2026", "2026-1-1", "20260101"]) {
+      assert.equal(parseDateRange(bad, "2026-12-31").ok, false);
+      assert.equal(parseDateRange("2026-01-01", bad).ok, false);
+    }
+  });
+
+  it("rejects an inverted range", () => {
+    const range = parseDateRange("2026-01-31", "2026-01-01");
+
+    assert.equal(range.ok, false);
+    assert.match(!range.ok ? range.error : "", /on or before/);
   });
 });
