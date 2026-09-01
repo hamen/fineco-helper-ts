@@ -71,6 +71,26 @@ function resolveIndex(
   return envIndex(envValue, fallback);
 }
 
+// One definition for the four tools that accept them. Spelled out per tool, the
+// `.safe()` guard had to be added in eight places, and a ninth would have been
+// easy to miss.
+const indexParams = {
+  account_index: z
+    .number()
+    .int()
+    .nonnegative()
+    .safe()
+    .optional()
+    .describe("Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX)."),
+  dossier_index: z
+    .number()
+    .int()
+    .nonnegative()
+    .safe()
+    .optional()
+    .describe("Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX)."),
+};
+
 async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
   let userId = process.env.FINECO_USER_ID;
   let password = process.env.FINECO_PASSWORD;
@@ -318,24 +338,7 @@ export function createFinecoMcpServer(): McpServer {
         .describe(
           "Output format (default: json). Shareable formats omit quantities, prices, and absolute values — they only include weights and P/L percentages.",
         ),
-      account_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
-        ),
-      dossier_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
-        ),
+      ...indexParams,
     },
     async ({ format, account_index, dossier_index }) => {
       const config = await buildConfig({
@@ -380,24 +383,7 @@ export function createFinecoMcpServer(): McpServer {
         .describe(
           "Generate shareable report without quantities, prices, or absolute values (default: false)",
         ),
-      account_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
-        ),
-      dossier_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
-        ),
+      ...indexParams,
     },
     async ({ output_path, shareable, account_index, dossier_index }) => {
       const reportPath = output_path ?? "portfolio-report.html";
@@ -455,24 +441,7 @@ export function createFinecoMcpServer(): McpServer {
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("End date in YYYY-MM-DD format."),
-      account_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
-        ),
-      dossier_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
-        ),
+      ...indexParams,
     },
     async ({ date_from, date_to, account_index, dossier_index }) => {
       const range = parseDateRange(date_from, date_to);
@@ -502,24 +471,7 @@ export function createFinecoMcpServer(): McpServer {
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("End date in YYYY-MM-DD format."),
-      account_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX).",
-        ),
-      dossier_index: z
-        .number()
-        .int()
-        .nonnegative()
-        .safe()
-        .optional()
-        .describe(
-          "Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX).",
-        ),
+      ...indexParams,
     },
     async ({ date_from, date_to, account_index, dossier_index }) => {
       const range = parseDateRange(date_from, date_to);

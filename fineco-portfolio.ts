@@ -88,6 +88,18 @@ export function retryAfterSeconds(
   return Math.max(0, Math.ceil((when - now) / 1000));
 }
 
+// Every CLI branch ends a failed call the same way, and each one that spelled the
+// message out by hand dropped the wait the bank had advertised. Built in one
+// place so a new command cannot forget it.
+export function apiFailureMessage(result: {
+  error: string;
+  retryAfterSeconds?: number;
+}): string {
+  return result.retryAfterSeconds === undefined
+    ? result.error
+    : `${result.error} Retry after ${String(result.retryAfterSeconds)}s.`;
+}
+
 // An exported empty env var is not a configured index: `?? "0"` would let it
 // through and send a blank header, which is a misconfiguration nobody would see.
 // A non-numeric value is worse: it reaches the bank verbatim in `X-Account-Index`,
@@ -2257,14 +2269,16 @@ const DIVIDEND_LEGS: Record<
 
 const UNLABELLED_SECURITY = "(unlabelled movement)";
 
-function toCents(amount: number | undefined): number {
+function toCents(amount: number | undefined, where: string): number {
   // `importo` is typed as a number but comes from an untyped bank response. A
   // string or null would make `Math.round` return NaN, which then spreads through
   // every total silently, and a missing one would post a dividend worth zero.
   // On a money path a loud stop beats a wrong number.
   if (amount === undefined || !Number.isFinite(amount)) {
+    // Names the row: one bad amount stops the whole report, so the caller needs to
+    // find it in the raw get_movements output without guessing.
     throw new Error(
-      `Movement has an unreadable importo: ${JSON.stringify(amount)}.`,
+      `Movement ${where} has an unreadable importo: ${JSON.stringify(amount)}.`,
     );
   }
   return Math.round(amount * 100);
@@ -2316,6 +2330,9 @@ export function dividendsFromMovements(
     const leg = code === undefined ? undefined : DIVIDEND_LEGS[code];
     if (!leg) return;
 
+    const rowRef =
+      movement.progressivoMovimento ??
+      `at row ${String(index)} (no progressivo)`;
     const label = securityLabel(movement.descrizione, leg.prefix);
     // The grouping key only has to be unique and stable; `security` is what a
     // caller reads. `progressivoMovimento` is optional too, so the last resort is
@@ -2336,12 +2353,12 @@ export function dividendsFromMovements(
 
     if (leg.leg === "gross") {
       // Signed on purpose: a reversal posts negative and must stay negative.
-      group.grossCents += toCents(movement.importo);
+      group.grossCents += toCents(movement.importo, rowRef);
       group.sawGross = true;
     } else {
       // Negated, not abs()'d: a normal withholding is a debit and becomes a
       // positive charge, while a refund stays negative instead of flipping into one.
-      group.withholdingCents += -toCents(movement.importo);
+      group.withholdingCents += -toCents(movement.importo, rowRef);
       group.sawWithholding = true;
     }
 
@@ -2630,7 +2647,8 @@ async function main(): Promise<void> {
         debug,
         ...(config.query === undefined ? {} : { query: config.query }),
       });
-      if (!zeroCommissionEtfs.ok) throw new Error(zeroCommissionEtfs.error);
+      if (!zeroCommissionEtfs.ok)
+        throw new Error(apiFailureMessage(zeroCommissionEtfs));
       await emitOutput(
         renderJsonOutput(zeroCommissionEtfs.data),
         config.outPath,
@@ -2646,14 +2664,14 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!summary.ok) throw new Error(summary.error);
+      if (!summary.ok) throw new Error(apiFailureMessage(summary));
       await emitOutput(
         renderOutput(summary.data, config.output),
         config.outPath,
       );
     } else if (config.command === "search-asset") {
       const search = await searchAssets(config, authenticatedCookie, debug);
-      if (!search.ok) throw new Error(search.error);
+      if (!search.ok) throw new Error(apiFailureMessage(search));
       await emitOutput(renderJsonOutput(search.data), config.outPath);
     } else if (config.command === "asset-details") {
       const details = await fetchAssetDetails(
@@ -2661,7 +2679,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!details.ok) throw new Error(details.error);
+      if (!details.ok) throw new Error(apiFailureMessage(details));
       await emitOutput(renderJsonOutput(details.data), config.outPath);
     } else if (config.command === "market-indices") {
       const indices = await fetchMarketIndices(
@@ -2669,7 +2687,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!indices.ok) throw new Error(indices.error);
+      if (!indices.ok) throw new Error(apiFailureMessage(indices));
       await emitOutput(renderJsonOutput(indices.data), config.outPath);
     } else if (config.command === "tax-carry-forward") {
       const taxCarryForward = await fetchTaxCarryForward(
@@ -2677,7 +2695,8 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!taxCarryForward.ok) throw new Error(taxCarryForward.error);
+      if (!taxCarryForward.ok)
+        throw new Error(apiFailureMessage(taxCarryForward));
       await emitOutput(renderJsonOutput(taxCarryForward.data), config.outPath);
     } else if (config.command === "tax-minus-by-year") {
       const taxMinusByYear = await fetchTaxMinusByYear(
@@ -2685,7 +2704,8 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!taxMinusByYear.ok) throw new Error(taxMinusByYear.error);
+      if (!taxMinusByYear.ok)
+        throw new Error(apiFailureMessage(taxMinusByYear));
       await emitOutput(renderJsonOutput(taxMinusByYear.data), config.outPath);
     } else if (config.command === "order-monitor") {
       const orderMonitor = await fetchOrderMonitor(
@@ -2693,7 +2713,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!orderMonitor.ok) throw new Error(orderMonitor.error);
+      if (!orderMonitor.ok) throw new Error(apiFailureMessage(orderMonitor));
       await emitOutput(renderJsonOutput(orderMonitor.data), config.outPath);
     } else if (config.command === "order-monitor-filters") {
       const orderMonitorFilters = await fetchOrderMonitorFilters(
@@ -2702,7 +2722,7 @@ async function main(): Promise<void> {
         debug,
       );
       if (!orderMonitorFilters.ok) {
-        throw new Error(orderMonitorFilters.error);
+        throw new Error(apiFailureMessage(orderMonitorFilters));
       }
       await emitOutput(
         renderJsonOutput(orderMonitorFilters.data),
@@ -2714,15 +2734,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!movements.ok) {
-        // The MCP tool returns retryAfterSeconds; dropping it here left the CLI
-        // unable to wait the interval the bank actually advertised.
-        throw new Error(
-          movements.retryAfterSeconds === undefined
-            ? movements.error
-            : `${movements.error} Retry after ${String(movements.retryAfterSeconds)}s.`,
-        );
-      }
+      if (!movements.ok) throw new Error(apiFailureMessage(movements));
       await emitOutput(renderJsonOutput(movements.data), config.outPath);
     } else {
       const exhaustiveCheck: never = config.command;

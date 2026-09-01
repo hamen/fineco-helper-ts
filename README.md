@@ -87,6 +87,13 @@ same key has the mirror limitation: two separate payments of the same security
 on the same day merge into one event with summed amounts. Totals stay right in
 that case too.
 
+When a description does not carry the expected prefix, `security` falls back to
+`progressivoMovimento` — a bank row id, not a security name — and such a leg can
+never pair, because that id is unique per row. A numeric-looking `security` with
+an `unpaired` marker is that shape, not a data error. `unpaired` names the leg
+that is **missing**: `unpaired: "withholding"` is a gross amount whose
+withholding was not found.
+
 Fetch tax carry-forward data for an explicit date range:
 
 ```sh

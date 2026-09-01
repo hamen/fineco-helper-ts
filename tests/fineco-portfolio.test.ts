@@ -23,6 +23,7 @@ import {
   retryAfterSeconds,
   renderOutput,
   envIndex,
+  apiFailureMessage,
   parseArgs,
   type Movement,
   type Config,
@@ -793,11 +794,13 @@ describe("dividendsFromMovements", () => {
             {
               ...movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 0),
               importo: undefined as unknown as number,
+              progressivoMovimento: "12345",
             },
           ],
           META,
         ),
-      /unreadable importo/,
+      // Names the row, so the caller can find it in the raw movements output.
+      /Movement 12345 has an unreadable importo/,
     );
   });
 
@@ -1835,5 +1838,27 @@ describe("parseDateRange", () => {
 
     assert.equal(range.ok, false);
     assert.match(!range.ok ? range.error : "", /on or before/);
+  });
+});
+
+describe("apiFailureMessage", () => {
+  // Every CLI branch used to build this by hand, and all but one dropped the wait
+  // the bank had advertised.
+  it("appends the advertised wait when there is one", () => {
+    assert.equal(
+      apiFailureMessage({ error: "Too many requests.", retryAfterSeconds: 30 }),
+      "Too many requests. Retry after 30s.",
+    );
+  });
+
+  it("leaves the message alone when there is no wait", () => {
+    assert.equal(apiFailureMessage({ error: "Nope." }), "Nope.");
+  });
+
+  it("keeps a zero wait, which means retry now", () => {
+    assert.equal(
+      apiFailureMessage({ error: "Nope.", retryAfterSeconds: 0 }),
+      "Nope. Retry after 0s.",
+    );
   });
 });
