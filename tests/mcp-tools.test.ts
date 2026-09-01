@@ -469,7 +469,7 @@ describe("MCP index env misconfiguration", () => {
   // handler's try. The SDK still turns that into an isError tool result rather
   // than a protocol error, and this pins that: the caller must be told what is
   // wrong with its configuration, and no request may go out.
-  for (const tool of ["get_portfolio", "get_movements"]) {
+  for (const tool of ["get_portfolio", "get_movements", "get_dividends"]) {
     it(`reports a bad FINECO_ACCOUNT_INDEX as a tool error from ${tool}`, async () => {
       const original = process.env.FINECO_ACCOUNT_INDEX;
       process.env.FINECO_ACCOUNT_INDEX = "abc";
@@ -478,7 +478,7 @@ describe("MCP index env misconfiguration", () => {
       try {
         const result = await callTool(
           tool,
-          tool === "get_movements" ? RANGE : {},
+          tool === "get_portfolio" ? {} : RANGE,
           () => {
             reachedNetwork = true;
             return new Response(

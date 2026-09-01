@@ -1331,6 +1331,11 @@ describe("account and dossier index headers", () => {
 
 describe("fetchMovements", () => {
   const range = { dateFrom: "2026-01-01", dateTo: "2026-01-31" };
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 
   it("reports truncation when any page is limited", async () => {
     const originalFetch = globalThis.fetch;
@@ -1497,6 +1502,47 @@ describe("fetchMovements", () => {
       assert.equal(calls, 2);
       assert.equal(result.ok && result.data.count, 250);
       assert.equal(result.ok && result.data.limitedResult, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // The regression the first-row version of the check would have caused: two card
+  // transactions with the same day, amount and description, and no progressivo,
+  // are ordinary data — not a repeated page.
+  it("keeps paginating when two pages open with an identical row", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    const twin = {
+      dataOperazione: "2026-01-02",
+      importo: 4.5,
+      descrizione: "PAGAMENTO CARTA",
+    };
+
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls > 2) return jsonResponse({ movimenti: [] });
+      return jsonResponse({
+        movimenti: [
+          twin,
+          {
+            dataOperazione: "2026-01-03",
+            importo: calls,
+            descrizione: `row from page ${String(calls)}`,
+          },
+        ],
+      });
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(result.ok && result.data.count, 4);
+      assert.equal(result.ok && result.data.limitedResult, false);
     } finally {
       globalThis.fetch = originalFetch;
     }

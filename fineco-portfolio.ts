@@ -2130,7 +2130,7 @@ export async function fetchMovements(
   let offset = 0;
   let requests = 0;
   let limited = false;
-  let previousFirstRow: string | undefined;
+  let previousPage: string | undefined;
   let balanceAtSearch: number | undefined;
   let balanceAtMovement: number | undefined;
 
@@ -2167,12 +2167,18 @@ export async function fetchMovements(
     // total downstream would silently double. Checked before the rows are kept,
     // so the repeat is dropped rather than counted, and the result says the range
     // is incomplete instead of reporting inflated money.
-    const firstRow = batch.length === 0 ? undefined : JSON.stringify(batch[0]);
-    if (firstRow !== undefined && firstRow === previousFirstRow) {
+    //
+    // The whole page is the fingerprint, not its first row: `progressivoMovimento`
+    // is optional, and two identical card transactions — same day, same amount,
+    // same description — landing either side of a page boundary would make a
+    // first-row check drop a page the server was serving correctly. A repeat that
+    // a server reorders still slips through; nothing cheap catches that.
+    const fingerprint = batch.length === 0 ? undefined : JSON.stringify(batch);
+    if (fingerprint !== undefined && fingerprint === previousPage) {
       limited = true;
       break;
     }
-    previousFirstRow = firstRow;
+    previousPage = fingerprint;
     if (page.data.limitedResult) limited = true;
     if (offset === 0) {
       balanceAtSearch = page.data.balanceAccountAtSearchDate;
@@ -2281,6 +2287,9 @@ function toCents(amount: number | undefined, where: string): number {
       `Movement ${where} has an unreadable importo: ${JSON.stringify(amount)}.`,
     );
   }
+  // Float intermediate, and safe at these magnitudes: 0.29 * 100 is
+  // 28.999999999999996, which rounds to the right cent. Amounts large enough to
+  // break that are far outside anything a retail account posts.
   return Math.round(amount * 100);
 }
 
