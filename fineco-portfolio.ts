@@ -84,9 +84,14 @@ export function retryAfterSeconds(
 
 // An exported empty env var is not a configured index: `?? "0"` would let it
 // through and send a blank header, which is a misconfiguration nobody would see.
+// A non-numeric value is worse: it reaches the bank verbatim in `X-Account-Index`,
+// while the MCP path validates the same field as a non-negative integer. Throwing
+// keeps the two paths symmetric and makes the typo visible at startup instead of
+// on the wire.
 export function envIndex(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : fallback;
+  if (!trimmed) return fallback;
+  return String(parseNonNegativeInteger(trimmed, `Index env var "${trimmed}"`));
 }
 
 function indexHeaders(config: Config): Record<string, string> {
@@ -485,7 +490,7 @@ function parseNonNegativeInteger(
   return Number(value);
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const positional: string[] = [];
   let itemName: string | undefined;
   let format: OutputFormat | undefined;
@@ -2126,7 +2131,10 @@ export async function fetchMovements(
       `Movements: offset=${offset}, batch=${batch.length}, total=${all.length}, lastPage=${page.data.lastPage}`,
     );
 
-    if (page.data.lastPage || batch.length === 0) break;
+    // A page shorter than the limit is the last one, whether or not the API says
+    // so. Advancing by `limit` past a short page skips every row the server did
+    // not send, and `lastPage` is optional in the response.
+    if (page.data.lastPage || batch.length < limit) break;
     offset += limit;
     if (offset > 200_000) {
       // Stopping early truncates the range just as surely as the API's own cap does.
@@ -2205,7 +2213,16 @@ const DIVIDEND_LEGS: Record<
 const UNLABELLED_SECURITY = "(unlabelled movement)";
 
 function toCents(amount: number | undefined): number {
-  return Math.round((amount ?? 0) * 100);
+  // `importo` is typed as a number but comes from an untyped bank response. A
+  // string or null would make `Math.round` return NaN, which then spreads through
+  // every total silently. On a money path a loud stop beats a wrong number.
+  if (amount === undefined) return 0;
+  if (!Number.isFinite(amount)) {
+    throw new Error(
+      `Movement has an unreadable importo: ${JSON.stringify(amount)}.`,
+    );
+  }
+  return Math.round(amount * 100);
 }
 
 // Returns the security label when the description carries the known prefix, and

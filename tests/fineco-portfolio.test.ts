@@ -22,6 +22,7 @@ import {
   retryAfterSeconds,
   renderOutput,
   envIndex,
+  parseArgs,
   type Movement,
   type Config,
   type Position,
@@ -764,6 +765,25 @@ const META = {
 };
 
 describe("dividendsFromMovements", () => {
+  // `importo` is typed as a number, but the bank response is untyped at runtime.
+  // A string amount used to make Math.round return NaN and pollute every total
+  // with no sign that anything was wrong.
+  it("refuses an amount it cannot read instead of returning NaN totals", () => {
+    assert.throws(
+      () =>
+        dividendsFromMovements(
+          [
+            {
+              ...movement("DII", "2026-02-10", "Div.su 100 EXAMPLE SPA", 0),
+              importo: "147,73" as unknown as number,
+            },
+          ],
+          META,
+        ),
+      /unreadable importo/,
+    );
+  });
+
   it("pairs an Italian dividend with its withholding", () => {
     // Amounts with real cents, not round numbers: they are what exercises the
     // Math.round path, where a float would drift.
@@ -1265,6 +1285,39 @@ describe("fetchMovements", () => {
     }
   });
 
+  // `lastPage` is optional in the response. Advancing by the full limit past a
+  // short page skips every row the server did not send.
+  it("stops on a short page even when lastPage is absent", async () => {
+    const originalFetch = globalThis.fetch;
+    const offsets: number[] = [];
+
+    globalThis.fetch = async (_input, init) => {
+      offsets.push(Number(JSON.parse(String(init?.body)).offset));
+      return new Response(
+        JSON.stringify({
+          movimenti: [
+            { dataOperazione: "2026-01-02", importo: 1 },
+            { dataOperazione: "2026-01-03", importo: 2 },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.deepEqual(offsets, [0]);
+      assert.equal(result.ok && result.data.count, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reports no truncation for a complete range", async () => {
     const originalFetch = globalThis.fetch;
 
@@ -1420,5 +1473,98 @@ describe("envIndex", () => {
     assert.equal(envIndex(undefined, "0"), "0");
     assert.equal(envIndex("", "0"), "0");
     assert.equal(envIndex("   ", "0"), "0");
+  });
+
+  // The MCP path validates the same field as a non-negative integer. Without
+  // this, `FINECO_ACCOUNT_INDEX=abc` reaches the bank verbatim in the header.
+  it("rejects a value that is not a non-negative integer", () => {
+    for (const bad of ["abc", "-1", "1.5", "0x1", "1 2"]) {
+      assert.throws(() => envIndex(bad, "0"), /non-negative integer/);
+    }
+  });
+});
+
+// parseArgs returns a union whose `help` arm carries no command or dates; the
+// tests below are about the other arms.
+function runArgs(argv: string[]) {
+  const args = parseArgs(argv);
+  if (args.kind === "help") throw new Error("Unexpected help output.");
+  return args;
+}
+
+describe("parseArgs movements", () => {
+  it("parses the command and its date range", () => {
+    const args = runArgs([
+      "movements",
+      "2026-01-01",
+      "2026-01-31",
+      "--op-item",
+      "Fineco",
+    ]);
+
+    assert.equal(args.kind, "onePassword");
+    assert.equal(args.command, "movements");
+    assert.equal(args.dateFrom, "2026-01-01");
+    assert.equal(args.dateTo, "2026-01-31");
+  });
+
+  it("takes USER PASSWORD after the range, as the usage text documents", () => {
+    const args = runArgs([
+      "movements",
+      "2026-02-01",
+      "2026-02-28",
+      "user",
+      "pass",
+    ]);
+
+    assert.equal(args.kind, "credentials");
+    assert.equal(args.command, "movements");
+    assert.equal(args.dateFrom, "2026-02-01");
+    assert.equal(args.dateTo, "2026-02-28");
+  });
+
+  it("rejects a missing, malformed, or inverted range", () => {
+    assert.throws(
+      () => parseArgs(["movements", "--op-item", "Fineco"]),
+      /Expected DATE_FROM and DATE_TO/,
+    );
+    assert.throws(
+      () =>
+        parseArgs([
+          "movements",
+          "01-01-2026",
+          "2026-01-31",
+          "--op-item",
+          "Fineco",
+        ]),
+      /YYYY-MM-DD/,
+    );
+    assert.throws(
+      () =>
+        parseArgs([
+          "movements",
+          "2026-01-31",
+          "2026-01-01",
+          "--op-item",
+          "Fineco",
+        ]),
+      /must be on or before/,
+    );
+  });
+
+  it("rejects --format, which only portfolio supports", () => {
+    assert.throws(
+      () =>
+        parseArgs([
+          "movements",
+          "2026-01-01",
+          "2026-01-31",
+          "--format",
+          "csv",
+          "--op-item",
+          "Fineco",
+        ]),
+      /only supported by portfolio/,
+    );
   });
 });

@@ -390,3 +390,51 @@ describe("MCP dividend tool", () => {
     assert.equal(report.truncated, true);
   });
 });
+
+describe("get_movements success payload", () => {
+  // Only the 429/451 and index paths were asserted at the tool: a 200 could have
+  // returned any shape at all and no test would have noticed.
+  it("returns the rows, the count, and both balances", async () => {
+    const result = await callTool(
+      "get_movements",
+      RANGE,
+      () =>
+        new Response(
+          JSON.stringify({
+            movimenti: [
+              {
+                dataOperazione: "2026-01-02",
+                descrizione: "Div.su 100 EXAMPLE SPA",
+                importo: 147.73,
+                causaleMovimento: "DII",
+              },
+            ],
+            lastPage: true,
+            balanceAccountAtSearchDate: 1234.56,
+            balanceAccountAtMovement: 1000,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const payload = JSON.parse(result.content[0]!.text) as {
+      count: number;
+      dateFrom: string;
+      dateTo: string;
+      limitedResult: boolean;
+      balanceAccountAtSearchDate: number;
+      balanceAccountAtMovement: number;
+      movimenti: Array<{ descrizione?: string; importo: number }>;
+    };
+
+    assert.equal(payload.count, 1);
+    assert.equal(payload.movimenti.length, 1);
+    assert.equal(payload.movimenti[0]!.importo, 147.73);
+    assert.equal(payload.movimenti[0]!.descrizione, "Div.su 100 EXAMPLE SPA");
+    assert.equal(payload.dateFrom, RANGE.date_from);
+    assert.equal(payload.dateTo, RANGE.date_to);
+    assert.equal(payload.limitedResult, false);
+    assert.equal(payload.balanceAccountAtSearchDate, 1234.56);
+    assert.equal(payload.balanceAccountAtMovement, 1000);
+  });
+});
