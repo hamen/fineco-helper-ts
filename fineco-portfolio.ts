@@ -50,6 +50,75 @@ export const ORDER_MONITOR_URL =
   "https://private-api.finecobank.com/v1/private/tol/transactions";
 export const ORDER_MONITOR_FILTERS_URL =
   "https://private-api.finecobank.com/v1/private/tol/monitor-filters";
+export const MOVEMENTS_URL =
+  "https://private-api.finecobank.com/v2/private/accounts-and-cards/movements";
+
+export const DEFAULT_ACCOUNT_INDEX = "0";
+export const DEFAULT_DOSSIER_INDEX = "0";
+
+// Fineco enforces PSD2 Strong Customer Authentication on the movements endpoint: a
+// password-only session reads roughly the last 90 days and answers 451 beyond that.
+export const SCA_WINDOW_MESSAGE =
+  "Fineco refused this movements range (HTTP 451, Strong Customer Authentication). " +
+  "A password-only session reads roughly the last 90 days; an older range needs an " +
+  "interactive SCA step-up, which this tool cannot perform.";
+
+// Both legal Retry-After forms: delay-seconds, and an HTTP date. Anything else is
+// treated as absent — a guessed wait is worse than no wait at all.
+export function retryAfterSeconds(
+  response: Response,
+  now: number = Date.now(),
+): number | undefined {
+  const header = response.headers.get("retry-after");
+  if (!header) return undefined;
+
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    // A header of 400 digits parses to Infinity, which JSON writes as `null` and
+    // breaks the numeric contract the MCP payload advertises. Anything past the
+    // safe range is not a wait a caller could honour anyway.
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
+
+  const when = Date.parse(trimmed);
+  if (Number.isNaN(when)) return undefined;
+  // Ceil, not round: rounding a sub-second remainder down to 0 tells the caller to
+  // retry at once, before the server said it may.
+  return Math.max(0, Math.ceil((when - now) / 1000));
+}
+
+// Every CLI branch ends a failed call the same way, and each one that spelled the
+// message out by hand dropped the wait the bank had advertised. Built in one
+// place so a new command cannot forget it.
+export function apiFailureMessage(result: {
+  error: string;
+  retryAfterSeconds?: number;
+}): string {
+  return result.retryAfterSeconds === undefined
+    ? result.error
+    : `${result.error} Retry after ${String(result.retryAfterSeconds)}s.`;
+}
+
+// An exported empty env var is not a configured index: `?? "0"` would let it
+// through and send a blank header, which is a misconfiguration nobody would see.
+// A non-numeric value is worse: it reaches the bank verbatim in `X-Account-Index`,
+// while the MCP path validates the same field as a non-negative integer. Throwing
+// keeps the two paths symmetric and makes the typo visible before the request
+// goes out rather than on the wire. The CLI fails at startup; the MCP server
+// builds its config per call, so there it surfaces as a tool error.
+export function envIndex(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return fallback;
+  return String(parseNonNegativeInteger(trimmed, `Index env var "${trimmed}"`));
+}
+
+function indexHeaders(config: Config): Record<string, string> {
+  return {
+    "X-Account-Index": config.accountIndex ?? DEFAULT_ACCOUNT_INDEX,
+    "X-Dossier-Index": config.dossierIndex ?? DEFAULT_DOSSIER_INDEX,
+  };
+}
 
 type CliCommand =
   | "portfolio"
@@ -61,7 +130,8 @@ type CliCommand =
   | "tax-carry-forward"
   | "tax-minus-by-year"
   | "order-monitor"
-  | "order-monitor-filters";
+  | "order-monitor-filters"
+  | "movements";
 
 const assetDetailFields = [
   "instrId",
@@ -237,6 +307,8 @@ export type Config = {
   similarInstrumentsUrl: string;
   newsUrl: string;
   instrumentListUrl: string;
+  accountIndex?: string;
+  dossierIndex?: string;
   syntheticCookies: boolean;
 };
 
@@ -257,7 +329,13 @@ type OnePasswordItem = {
 
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; status?: number; authExpired?: boolean };
+  | {
+      ok: false;
+      error: string;
+      status?: number;
+      authExpired?: boolean;
+      retryAfterSeconds?: number;
+    };
 
 class UsageError extends Error {}
 
@@ -351,6 +429,8 @@ function usage(): string {
   npm start -- tax-carry-forward DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- tax-minus-by-year USER PASSWORD [--out path]
   npm start -- tax-minus-by-year --op-item "Fineco" [--out path]
+  npm start -- movements DATE_FROM DATE_TO USER PASSWORD [--out path]
+  npm start -- movements DATE_FROM DATE_TO --op-item "Fineco" [--out path]
   npm start -- order-monitor [--type equity] [--days 0] --op-item "Fineco" [--out path]
   npm start -- order-monitor-filters [--type equity] --op-item "Fineco" [--out path]
   npm start -- zero-commission-etfs [query] [--out path]
@@ -365,6 +445,8 @@ Commands:
   tax-minus-by-year     Fetch tax carry-forward minus residue grouped by tax year.
   order-monitor         Fetch order monitor transactions for an instrument type and day window.
   order-monitor-filters Fetch available order monitor status filters for an instrument type.
+  movements             Fetch current-account and card movements for an explicit YYYY-MM-DD date range.
+                        Ranges past roughly 90 days need Strong Customer Authentication and fail with HTTP 451.
   zero-commission-etfs  Fetch Fineco's public zero-commission ETF list. Optional query filters by ISIN, venue, issuer, or description.
 
 Credentials:
@@ -394,6 +476,24 @@ Examples:
 `;
 }
 
+export type DateRangeResult =
+  | { ok: true; dateFrom: string; dateTo: string }
+  | { ok: false; error: string };
+
+// Returns a result rather than an MCP payload, so it stays usable from the CLI.
+export function parseDateRange(
+  dateFrom: string | undefined,
+  dateTo: string | undefined,
+): DateRangeResult {
+  if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
+    return { ok: false, error: "Dates must be in YYYY-MM-DD format." };
+  }
+  if (dateFrom > dateTo) {
+    return { ok: false, error: "date_from must be on or before date_to." };
+  }
+  return { ok: true, dateFrom, dateTo };
+}
+
 export function isIsoDate(value: string | undefined): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -408,10 +508,17 @@ function parseNonNegativeInteger(
   if (!value || !/^\d+$/.test(value)) {
     throw new UsageError(`${label} must be a non-negative integer.`);
   }
-  return Number(value);
+  const parsed = Number(value);
+  // Past 2^53 the digits still look like an integer but the parse is lossy:
+  // "9007199254740993" becomes 9007199254740992 and would select a different
+  // index than the one that was asked for.
+  if (!Number.isSafeInteger(parsed)) {
+    throw new UsageError(`${label} is too large to represent exactly.`);
+  }
+  return parsed;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const positional: string[] = [];
   let itemName: string | undefined;
   let format: OutputFormat | undefined;
@@ -430,7 +537,8 @@ function parseArgs(argv: string[]): CliArgs {
     argv[0] === "tax-carry-forward" ||
     argv[0] === "tax-minus-by-year" ||
     argv[0] === "order-monitor" ||
-    argv[0] === "order-monitor-filters"
+    argv[0] === "order-monitor-filters" ||
+    argv[0] === "movements"
   ) {
     command = argv.shift() as CliCommand;
   }
@@ -553,10 +661,10 @@ function parseArgs(argv: string[]): CliArgs {
       ? positional.join(" ")
       : undefined;
 
-  const dateFrom =
-    command === "tax-carry-forward" ? positional.shift() : undefined;
-  const dateTo =
-    command === "tax-carry-forward" ? positional.shift() : undefined;
+  const wantsDateRange =
+    command === "tax-carry-forward" || command === "movements";
+  const dateFrom = wantsDateRange ? positional.shift() : undefined;
+  const dateTo = wantsDateRange ? positional.shift() : undefined;
 
   if (command === "search-asset" && !query) {
     throw new UsageError("Expected search text after search-asset.");
@@ -567,26 +675,19 @@ function parseArgs(argv: string[]): CliArgs {
   if (command === "enrichment" && !query) {
     throw new UsageError("Expected source URL after enrichment.");
   }
-  if (command === "tax-carry-forward" && (!dateFrom || !dateTo)) {
-    throw new UsageError(
-      "Expected DATE_FROM and DATE_TO after tax-carry-forward.",
-    );
+  if (wantsDateRange && (!dateFrom || !dateTo)) {
+    throw new UsageError(`Expected DATE_FROM and DATE_TO after ${command}.`);
+  }
+  if (wantsDateRange && (!isIsoDate(dateFrom) || !isIsoDate(dateTo))) {
+    throw new UsageError(`${command} dates must use YYYY-MM-DD format.`);
   }
   if (
-    command === "tax-carry-forward" &&
-    (!isIsoDate(dateFrom) || !isIsoDate(dateTo))
-  ) {
-    throw new UsageError("tax-carry-forward dates must use YYYY-MM-DD format.");
-  }
-  if (
-    command === "tax-carry-forward" &&
+    wantsDateRange &&
     isIsoDate(dateFrom) &&
     isIsoDate(dateTo) &&
     dateFrom > dateTo
   ) {
-    throw new UsageError(
-      "tax-carry-forward DATE_FROM must be on or before DATE_TO.",
-    );
+    throw new UsageError(`${command} DATE_FROM must be on or before DATE_TO.`);
   }
 
   if (command === "zero-commission-etfs" && positional.length > 0) {
@@ -769,6 +870,14 @@ function buildConfig(
     newsUrl: process.env.FINECO_NEWS_URL ?? NEWS_URL,
     instrumentListUrl:
       process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
+    accountIndex: envIndex(
+      process.env.FINECO_ACCOUNT_INDEX,
+      DEFAULT_ACCOUNT_INDEX,
+    ),
+    dossierIndex: envIndex(
+      process.env.FINECO_DOSSIER_INDEX,
+      DEFAULT_DOSSIER_INDEX,
+    ),
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
 }
@@ -969,20 +1078,33 @@ export function toCsv(rows: Position[]): string {
   ].join("\n");
 }
 
+// One formula for both the shareable renderers and the JSON payload. Two would
+// drift, and the fixtures here carry `summary.show` but no `summary.total`, so a
+// second formula reading `total` alone would silently disagree.
+export function portfolioTotalMarketValue(summary: PositionsSummary): number {
+  const total = summary.summary?.show ?? summary.summary?.total ?? {};
+  return total.marketValue ?? 0;
+}
+
+export function positionWeightPerc(
+  position: Position,
+  totalMarketValue: number,
+): number | undefined {
+  return totalMarketValue > 0 && typeof position.marketValue === "number"
+    ? (position.marketValue / totalMarketValue) * 100
+    : undefined;
+}
+
 function shareableRows(
   summary: PositionsSummary,
 ): Array<Record<string, string>> {
   const rows = positionsAsRows(summary);
-  const total = summary.summary?.show ?? summary.summary?.total ?? {};
-  const totalMarketValue = total.marketValue ?? 0;
+  const totalMarketValue = portfolioTotalMarketValue(summary);
 
   return [...rows]
     .sort((a, b) => (b.marketValue ?? 0) - (a.marketValue ?? 0))
     .map((position) => {
-      const weight =
-        totalMarketValue > 0 && typeof position.marketValue === "number"
-          ? (position.marketValue / totalMarketValue) * 100
-          : undefined;
+      const weight = positionWeightPerc(position, totalMarketValue);
 
       return {
         description: String(position.description ?? ""),
@@ -1548,10 +1670,22 @@ export function renderOutput(
     return toRecordCsv(shareableRows(summary));
   }
 
+  const totalMarketValue = portfolioTotalMarketValue(summary);
+
   return JSON.stringify(
     {
+      capturedAt: new Date().toISOString(),
       summary: summary.summary,
-      rows,
+      // Copies, never the live Position objects: `positionsAsRows` hands back
+      // `summary.positions.show` by reference, and `toCsv` builds its header row
+      // from `Object.keys`, so an in-place field would leak a column into a later
+      // csv/html render of the same summary.
+      rows: rows.map((position) => {
+        const weightPerc = positionWeightPerc(position, totalMarketValue);
+        return weightPerc === undefined
+          ? { ...position }
+          : { ...position, weightPerc };
+      }),
       rowCount: rows.length,
     },
     null,
@@ -1588,8 +1722,7 @@ export async function fetchPositionsSummary(
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "X-Account-Index": "0",
-        "X-Dossier-Index": "0",
+        ...indexHeaders(config),
       },
     },
     cookie,
@@ -1601,11 +1734,16 @@ export async function fetchPositionsSummary(
   );
 
   if (!positions.response.ok) {
+    const retryAfter =
+      positions.response.status === 429
+        ? retryAfterSeconds(positions.response)
+        : undefined;
     return {
       ok: false,
       status: positions.response.status,
       authExpired:
         positions.response.status === 401 || positions.response.status === 403,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `Positions summary API failed: HTTP ${
         positions.response.status
       } ${body.slice(0, 500)}`,
@@ -1624,6 +1762,7 @@ export async function fetchPositionsSummary(
 
 async function fetchJsonApi<T>(
   url: string,
+  config: Config,
   cookie: string,
   debug: (message: string) => void,
   options: {
@@ -1646,8 +1785,7 @@ async function fetchJsonApi<T>(
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "X-Account-Index": "0",
-        "X-Dossier-Index": "0",
+        ...indexHeaders(config),
       },
       ...(options.body === undefined
         ? {}
@@ -1662,11 +1800,16 @@ async function fetchJsonApi<T>(
   );
 
   if (!response.response.ok) {
+    const retryAfter =
+      response.response.status === 429
+        ? retryAfterSeconds(response.response)
+        : undefined;
     return {
       ok: false,
       status: response.response.status,
       authExpired:
         response.response.status === 401 || response.response.status === 403,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `${options.label} failed: HTTP ${
         response.response.status
       } ${body.slice(0, 500)}`,
@@ -1692,7 +1835,7 @@ export async function searchAssets(
   const url = new URL(config.marketSearchUrl);
   url.searchParams.set("term", config.query);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Market search API",
     referer: "https://finecobank.com/pvt/home",
   });
@@ -1748,7 +1891,7 @@ export async function fetchAssetDetails(
     similar,
     news,
   ] = await Promise.all([
-    fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+    fetchJsonApi(config.assetDetailsUrl, config, cookie, debug, {
       label: "Asset details API",
       method: "POST",
       referer,
@@ -1758,31 +1901,31 @@ export async function fetchAssetDetails(
         withWarnings: true,
       },
     }),
-    fetchJsonApi(marketSnapshotUrl, cookie, debug, {
+    fetchJsonApi(marketSnapshotUrl, config, cookie, debug, {
       label: "Market snapshot API",
       referer,
     }),
-    fetchJsonApi(instrumentSnapshotUrl.toString(), cookie, debug, {
+    fetchJsonApi(instrumentSnapshotUrl.toString(), config, cookie, debug, {
       label: "Instrument snapshot API",
       referer,
     }),
-    fetchJsonApi(chartUrl.toString(), cookie, debug, {
+    fetchJsonApi(chartUrl.toString(), config, cookie, debug, {
       label: "Chart API",
       referer,
     }),
-    fetchJsonApi(linkedIndicesUrl, cookie, debug, {
+    fetchJsonApi(linkedIndicesUrl, config, cookie, debug, {
       label: "Linked indices API",
       referer,
     }),
-    fetchJsonApi(eventsUrl.toString(), cookie, debug, {
+    fetchJsonApi(eventsUrl.toString(), config, cookie, debug, {
       label: "Economic events API",
       referer,
     }),
-    fetchJsonApi(similarUrl.toString(), cookie, debug, {
+    fetchJsonApi(similarUrl.toString(), config, cookie, debug, {
       label: "Similar instruments API",
       referer,
     }),
-    fetchJsonApi(newsUrl.toString(), cookie, debug, {
+    fetchJsonApi(newsUrl.toString(), config, cookie, debug, {
       label: "News API",
       referer,
     }),
@@ -1801,13 +1944,13 @@ export async function fetchAssetDetails(
   const [relatedList, relatedStatic] =
     relatedKeys.length > 0
       ? await Promise.all([
-          fetchJsonApi(config.instrumentListUrl, cookie, debug, {
+          fetchJsonApi(config.instrumentListUrl, config, cookie, debug, {
             label: "Related instrument list API",
             method: "POST",
             referer,
             body: { instruments: relatedKeys },
           }),
-          fetchJsonApi(config.assetDetailsUrl, cookie, debug, {
+          fetchJsonApi(config.assetDetailsUrl, config, cookie, debug, {
             label: "Related static instruments API",
             method: "POST",
             referer,
@@ -1859,7 +2002,7 @@ export async function fetchMarketIndices(
   cookie: string,
   debug: (message: string) => void,
 ): Promise<ApiResult<unknown>> {
-  return fetchJsonApi(config.marketIndicesUrl, cookie, debug, {
+  return fetchJsonApi(config.marketIndicesUrl, config, cookie, debug, {
     label: "Market indices API",
     referer: "https://finecobank.com/pvt/trading/home",
   });
@@ -1878,7 +2021,7 @@ export async function fetchTaxCarryForward(
   url.searchParams.set("dateFrom", config.dateFrom);
   url.searchParams.set("dateTo", config.dateTo);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Tax carry-forward API",
     referer:
       "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
@@ -1890,7 +2033,7 @@ export async function fetchTaxMinusByYear(
   cookie: string,
   debug: (message: string) => void,
 ): Promise<ApiResult<unknown>> {
-  return fetchJsonApi(config.taxCarryForwardMinusUrl, cookie, debug, {
+  return fetchJsonApi(config.taxCarryForwardMinusUrl, config, cookie, debug, {
     label: "Tax minus by year API",
     referer:
       "https://finecobank.com/pvt/portfolio/report/tax-carry-forward/current-month",
@@ -1906,7 +2049,7 @@ export async function fetchOrderMonitor(
   url.searchParams.set("type", config.orderType);
   url.searchParams.set("days", String(config.orderDays));
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Order monitor API",
     referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
   });
@@ -1920,10 +2063,353 @@ export async function fetchOrderMonitorFilters(
   const url = new URL(config.orderMonitorFiltersUrl);
   url.searchParams.set("type", config.orderType);
 
-  return fetchJsonApi(url.toString(), cookie, debug, {
+  return fetchJsonApi(url.toString(), config, cookie, debug, {
     label: "Order monitor filters API",
     referer: "https://finecobank.com/pvt/portfolio/order-monitor/shares",
   });
+}
+
+export type Movement = {
+  dataOperazione: string;
+  dataValuta?: string;
+  causale?: string;
+  descrizione?: string;
+  descrizioneBreve?: string;
+  importo: number;
+  causaleMovimento?: string;
+  tipoMovimento?: string;
+  bfCategoria?: string | null;
+  bfSottocategoria?: string | null;
+  bfIdBrand?: string | null;
+  progressivoMovimento?: string;
+};
+
+type MovementsPage = {
+  movimenti?: Movement[];
+  lastPage?: boolean;
+  limitedResult?: boolean;
+  balanceAccountAtSearchDate?: number;
+  balanceAccountAtMovement?: number;
+};
+
+export type MovementsResult = {
+  movimenti: Movement[];
+  count: number;
+  dateFrom: string;
+  dateTo: string;
+  limitedResult: boolean;
+  balanceAccountAtSearchDate?: number;
+  balanceAccountAtMovement?: number;
+};
+
+// 200_000 rows at the 250-row page size is 800 requests; the cap sits just above
+// that so a normal full range never reaches it.
+const MAX_MOVEMENT_PAGES = 1_000;
+
+// Pulls current-account + cards movements over an arbitrary date range,
+// auto-paginating with offset/limit until the API reports the last page.
+// This is what bypasses the web UI's statement-download cap.
+export async function fetchMovements(
+  config: Config,
+  cookie: string,
+  debug: (message: string) => void,
+): Promise<ApiResult<MovementsResult>> {
+  if (!config.dateFrom || !config.dateTo) {
+    throw new Error("Missing movements date range.");
+  }
+  // Sent as UTC instants because that is the shape the endpoint expects. The bank
+  // reports in Europe/Rome, so if it ever compared these as instants rather than
+  // as calendar days, a boundary-day row could land outside the window. Every
+  // range observed so far comes back with both boundary days whole, which is what
+  // a naive-date comparison looks like — but this is an observation, not a
+  // documented guarantee.
+  const dateFromIso = `${config.dateFrom}T00:00:00.000Z`;
+  const dateToIso = `${config.dateTo}T23:59:59.999Z`;
+  const limit = 250;
+  const all: Movement[] = [];
+  let offset = 0;
+  let requests = 0;
+  let limited = false;
+  let previousPage: string | undefined;
+  let balanceAtSearch: number | undefined;
+  let balanceAtMovement: number | undefined;
+
+  for (;;) {
+    requests += 1;
+    const page = await fetchJsonApi<MovementsPage>(
+      MOVEMENTS_URL,
+      config,
+      cookie,
+      debug,
+      {
+        label: "Movements API",
+        method: "POST",
+        referer: "https://finecobank.com/pvt/conto-corrente/saldo-e-movimenti",
+        body: {
+          dateFrom: dateFromIso,
+          dateTo: dateToIso,
+          offset,
+          limit,
+          keyword: "",
+        },
+      },
+    );
+    if (!page.ok) {
+      // 451 here is always the SCA window, and the raw bank body does not say so.
+      return page.status === 451
+        ? { ...page, error: `${SCA_WINDOW_MESSAGE} (${page.error})` }
+        : page;
+    }
+
+    const batch = page.data.movimenti ?? [];
+    // A server that ignores `offset` — or a proxy serving a cached page — would
+    // hand back rows already collected while the loop kept advancing, and every
+    // total downstream would silently double. Checked before the rows are kept,
+    // so the repeat is dropped rather than counted, and the result says the range
+    // is incomplete instead of reporting inflated money.
+    //
+    // The whole page is the fingerprint, not its first row: `progressivoMovimento`
+    // is optional, and two identical card transactions — same day, same amount,
+    // same description — landing either side of a page boundary would make a
+    // first-row check drop a page the server was serving correctly. A repeat that
+    // a server reorders still slips through; nothing cheap catches that.
+    const fingerprint = batch.length === 0 ? undefined : JSON.stringify(batch);
+    if (fingerprint !== undefined && fingerprint === previousPage) {
+      limited = true;
+      break;
+    }
+    previousPage = fingerprint;
+    if (page.data.limitedResult) limited = true;
+    if (offset === 0) {
+      balanceAtSearch = page.data.balanceAccountAtSearchDate;
+      balanceAtMovement = page.data.balanceAccountAtMovement;
+    }
+    all.push(...batch);
+    debug(
+      `Movements: offset=${offset}, batch=${batch.length}, total=${all.length}, lastPage=${page.data.lastPage}`,
+    );
+
+    if (page.data.lastPage || batch.length === 0) break;
+    // Advance by what the page actually returned, not by `limit`. `lastPage` is
+    // optional in the response, so a short page without it would leave the next
+    // request starting past every row the server did not send. Advancing by the
+    // batch size skips nothing, and a short page that really was the last one
+    // costs one extra request that comes back empty and ends the loop.
+    offset += batch.length;
+    // Two backstops, because the offset alone no longer bounds the request count:
+    // pages advance by their own size now, so a server that answers one row at a
+    // time would keep the loop under the row cap for 200_000 requests.
+    if (offset > 200_000 || requests >= MAX_MOVEMENT_PAGES) {
+      // Stopping early truncates the range just as surely as the API's own cap does.
+      limited = true;
+      break;
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      movimenti: all,
+      count: all.length,
+      dateFrom: config.dateFrom,
+      dateTo: config.dateTo,
+      limitedResult: limited,
+      ...(balanceAtSearch === undefined
+        ? {}
+        : { balanceAccountAtSearchDate: balanceAtSearch }),
+      ...(balanceAtMovement === undefined
+        ? {}
+        : { balanceAccountAtMovement: balanceAtMovement }),
+    },
+  };
+}
+
+export type DividendKind = "dividend" | "remunerated_portfolio";
+
+export type DividendEvent = {
+  payDate: string;
+  security: string;
+  kind: DividendKind;
+  grossCents: number;
+  withholdingCents: number;
+  netCents: number;
+  unpaired?: "gross" | "withholding";
+};
+
+export type DividendReport = {
+  capturedAt: string;
+  dateFrom: string;
+  dateTo: string;
+  assumedCurrency: "EUR";
+  truncated: boolean;
+  events: DividendEvent[];
+  totals: {
+    grossCents: number;
+    withholdingCents: number;
+    netCents: number;
+    count: number;
+  };
+};
+
+// `causaleMovimento` is the stable key. `causale` is display text and lies: a
+// NVIDIA dividend arrives under "Dividendo Italia" too, so the code means
+// "dividend credit", not "Italian dividend".
+const DIVIDEND_LEGS: Record<
+  string,
+  { leg: "gross" | "withholding"; kind: DividendKind; prefix: string }
+> = {
+  DII: { leg: "gross", kind: "dividend", prefix: "Div.su " },
+  DIR: { leg: "withholding", kind: "dividend", prefix: "Rit.div.su " },
+  DER: { leg: "withholding", kind: "dividend", prefix: "Rit.div.su " },
+  DPR: {
+    leg: "gross",
+    kind: "remunerated_portfolio",
+    prefix: "Acc.div.Port.Rem. ",
+  },
+  RPR: {
+    leg: "withholding",
+    kind: "remunerated_portfolio",
+    prefix: "Add.rit.Port.Rem. ",
+  },
+};
+
+const UNLABELLED_SECURITY = "(unlabelled movement)";
+
+function toCents(amount: number | undefined, where: string): number {
+  // `importo` is typed as a number but comes from an untyped bank response. A
+  // string or null would make `Math.round` return NaN, which then spreads through
+  // every total silently, and a missing one would post a dividend worth zero.
+  // On a money path a loud stop beats a wrong number.
+  if (amount === undefined || !Number.isFinite(amount)) {
+    // Names the row: one bad amount stops the whole report, so the caller needs to
+    // find it in the raw get_movements output without guessing.
+    throw new Error(
+      `Movement ${where} has an unreadable importo: ${JSON.stringify(amount)}.`,
+    );
+  }
+  // Float intermediate, and safe at these magnitudes: 0.29 * 100 is
+  // 28.999999999999996, which rounds to the right cent. Amounts large enough to
+  // break that are far outside anything a retail account posts.
+  return Math.round(amount * 100);
+}
+
+// Returns the security label when the description carries the known prefix, and
+// undefined otherwise. Never falls back to the whole description: that would put
+// every prefix-less row in one bucket and merge unrelated securities.
+function securityLabel(
+  description: string | undefined,
+  prefix: string,
+): string | undefined {
+  if (!description) return undefined;
+  const trimmed = description.trim();
+  // Case-insensitive: a casing change in the bank's descriptions would otherwise
+  // demote every row to the progressivo fallback, and nothing in the output
+  // would say the labels had stopped resolving.
+  if (!trimmed.toLowerCase().startsWith(prefix.toLowerCase())) return undefined;
+  // A description that is nothing but the prefix parses to "", which is not a
+  // label. Returning it would put a blank `security` in the report and let two
+  // unrelated blank rows share a group key.
+  const label = trimmed.slice(prefix.length).trim();
+  return label === "" ? undefined : label;
+}
+
+export function dividendsFromMovements(
+  movements: Movement[],
+  meta: {
+    dateFrom: string;
+    dateTo: string;
+    capturedAt: string;
+    truncated?: boolean;
+  },
+): DividendReport {
+  type Group = {
+    payDate: string;
+    security: string;
+    kind: DividendKind;
+    grossCents: number;
+    withholdingCents: number;
+    sawGross: boolean;
+    sawWithholding: boolean;
+  };
+
+  const groups = new Map<string, Group>();
+
+  movements.forEach((movement, index) => {
+    const code = movement.causaleMovimento;
+    const leg = code === undefined ? undefined : DIVIDEND_LEGS[code];
+    if (!leg) return;
+
+    const rowRef =
+      movement.progressivoMovimento ??
+      `at row ${String(index)} (no progressivo)`;
+    const label = securityLabel(movement.descrizione, leg.prefix);
+    // The grouping key only has to be unique and stable; `security` is what a
+    // caller reads. `progressivoMovimento` is optional too, so the last resort is
+    // the row index, which is unique by construction.
+    const key =
+      label ?? movement.progressivoMovimento ?? `row:${String(index)}`;
+    const groupKey = `${movement.dataOperazione}|${leg.kind}|${key}`;
+
+    const group = groups.get(groupKey) ?? {
+      payDate: movement.dataOperazione,
+      security: label ?? movement.progressivoMovimento ?? UNLABELLED_SECURITY,
+      kind: leg.kind,
+      grossCents: 0,
+      withholdingCents: 0,
+      sawGross: false,
+      sawWithholding: false,
+    };
+
+    if (leg.leg === "gross") {
+      // Signed on purpose: a reversal posts negative and must stay negative.
+      group.grossCents += toCents(movement.importo, rowRef);
+      group.sawGross = true;
+    } else {
+      // Negated, not abs()'d: a normal withholding is a debit and becomes a
+      // positive charge, while a refund stays negative instead of flipping into one.
+      group.withholdingCents += -toCents(movement.importo, rowRef);
+      group.sawWithholding = true;
+    }
+
+    groups.set(groupKey, group);
+  });
+
+  const events: DividendEvent[] = [...groups.values()].map((group) => ({
+    payDate: group.payDate,
+    security: group.security,
+    kind: group.kind,
+    grossCents: group.grossCents,
+    withholdingCents: group.withholdingCents,
+    netCents: group.grossCents - group.withholdingCents,
+    // Both flags matter. An orphan withholding without its gross understates
+    // income; an orphan gross is either an instrument with no withholding or a
+    // window that clipped the second leg, and nothing here can tell those apart.
+    ...(group.sawGross && group.sawWithholding
+      ? {}
+      : {
+          unpaired: group.sawGross
+            ? ("withholding" as const)
+            : ("gross" as const),
+        }),
+  }));
+
+  return {
+    capturedAt: meta.capturedAt,
+    dateFrom: meta.dateFrom,
+    dateTo: meta.dateTo,
+    assumedCurrency: "EUR",
+    truncated: meta.truncated ?? false,
+    events,
+    totals: {
+      grossCents: events.reduce((sum, event) => sum + event.grossCents, 0),
+      withholdingCents: events.reduce(
+        (sum, event) => sum + event.withholdingCents,
+        0,
+      ),
+      netCents: events.reduce((sum, event) => sum + event.netCents, 0),
+      count: events.length,
+    },
+  };
 }
 
 export function filterZeroCommissionEtfs(
@@ -1979,9 +2465,12 @@ export async function fetchZeroCommissionEtfs(
   );
 
   if (!response.ok) {
+    const retryAfter =
+      response.status === 429 ? retryAfterSeconds(response) : undefined;
     return {
       ok: false,
       status: response.status,
+      ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
       error: `Zero-commission ETF list failed: HTTP ${
         response.status
       } ${body.slice(0, 500)}`,
@@ -2167,7 +2656,8 @@ async function main(): Promise<void> {
         debug,
         ...(config.query === undefined ? {} : { query: config.query }),
       });
-      if (!zeroCommissionEtfs.ok) throw new Error(zeroCommissionEtfs.error);
+      if (!zeroCommissionEtfs.ok)
+        throw new Error(apiFailureMessage(zeroCommissionEtfs));
       await emitOutput(
         renderJsonOutput(zeroCommissionEtfs.data),
         config.outPath,
@@ -2183,14 +2673,14 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!summary.ok) throw new Error(summary.error);
+      if (!summary.ok) throw new Error(apiFailureMessage(summary));
       await emitOutput(
         renderOutput(summary.data, config.output),
         config.outPath,
       );
     } else if (config.command === "search-asset") {
       const search = await searchAssets(config, authenticatedCookie, debug);
-      if (!search.ok) throw new Error(search.error);
+      if (!search.ok) throw new Error(apiFailureMessage(search));
       await emitOutput(renderJsonOutput(search.data), config.outPath);
     } else if (config.command === "asset-details") {
       const details = await fetchAssetDetails(
@@ -2198,7 +2688,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!details.ok) throw new Error(details.error);
+      if (!details.ok) throw new Error(apiFailureMessage(details));
       await emitOutput(renderJsonOutput(details.data), config.outPath);
     } else if (config.command === "market-indices") {
       const indices = await fetchMarketIndices(
@@ -2206,7 +2696,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!indices.ok) throw new Error(indices.error);
+      if (!indices.ok) throw new Error(apiFailureMessage(indices));
       await emitOutput(renderJsonOutput(indices.data), config.outPath);
     } else if (config.command === "tax-carry-forward") {
       const taxCarryForward = await fetchTaxCarryForward(
@@ -2214,7 +2704,8 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!taxCarryForward.ok) throw new Error(taxCarryForward.error);
+      if (!taxCarryForward.ok)
+        throw new Error(apiFailureMessage(taxCarryForward));
       await emitOutput(renderJsonOutput(taxCarryForward.data), config.outPath);
     } else if (config.command === "tax-minus-by-year") {
       const taxMinusByYear = await fetchTaxMinusByYear(
@@ -2222,7 +2713,8 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!taxMinusByYear.ok) throw new Error(taxMinusByYear.error);
+      if (!taxMinusByYear.ok)
+        throw new Error(apiFailureMessage(taxMinusByYear));
       await emitOutput(renderJsonOutput(taxMinusByYear.data), config.outPath);
     } else if (config.command === "order-monitor") {
       const orderMonitor = await fetchOrderMonitor(
@@ -2230,7 +2722,7 @@ async function main(): Promise<void> {
         authenticatedCookie,
         debug,
       );
-      if (!orderMonitor.ok) throw new Error(orderMonitor.error);
+      if (!orderMonitor.ok) throw new Error(apiFailureMessage(orderMonitor));
       await emitOutput(renderJsonOutput(orderMonitor.data), config.outPath);
     } else if (config.command === "order-monitor-filters") {
       const orderMonitorFilters = await fetchOrderMonitorFilters(
@@ -2239,12 +2731,20 @@ async function main(): Promise<void> {
         debug,
       );
       if (!orderMonitorFilters.ok) {
-        throw new Error(orderMonitorFilters.error);
+        throw new Error(apiFailureMessage(orderMonitorFilters));
       }
       await emitOutput(
         renderJsonOutput(orderMonitorFilters.data),
         config.outPath,
       );
+    } else if (config.command === "movements") {
+      const movements = await fetchMovements(
+        config,
+        authenticatedCookie,
+        debug,
+      );
+      if (!movements.ok) throw new Error(apiFailureMessage(movements));
+      await emitOutput(renderJsonOutput(movements.data), config.outPath);
     } else {
       const exhaustiveCheck: never = config.command;
       throw new Error(`Unsupported command: ${exhaustiveCheck}`);

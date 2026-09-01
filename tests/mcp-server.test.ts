@@ -31,8 +31,10 @@ describe("MCP server", () => {
         "fineco_session_status",
         "generate_report",
         "get_asset_details",
+        "get_dividends",
         "get_enrichment",
         "get_market_indices",
+        "get_movements",
         "get_order_monitor",
         "get_order_monitor_filters",
         "get_portfolio",
@@ -41,7 +43,7 @@ describe("MCP server", () => {
         "get_zero_commission_etfs",
         "search_asset",
       ]);
-      assert.equal(tools.length, 13);
+      assert.equal(tools.length, 15);
 
       // Verify get_portfolio has format parameter
       const getPf = tools.find((t) => t.name === "get_portfolio")!;
@@ -56,6 +58,40 @@ describe("MCP server", () => {
         JSON.stringify(genRpt.inputSchema).includes("output_path"),
         "generate_report should have an output_path parameter",
       );
+
+      // The date range is required on both movement tools, and the optional index
+      // params have to be present or a caller cannot reach a second dossier.
+      for (const name of ["get_movements", "get_dividends"]) {
+        const tool = tools.find((t) => t.name === name)!;
+        const schema = tool.inputSchema as {
+          properties?: Record<string, unknown>;
+          required?: string[];
+        };
+
+        assert.deepEqual(
+          [...(schema.required ?? [])].sort(),
+          ["date_from", "date_to"],
+          `${name} should require date_from and date_to`,
+        );
+        assert.ok(
+          schema.properties?.["account_index"] !== undefined &&
+            schema.properties["dossier_index"] !== undefined,
+          `${name} should accept account_index and dossier_index`,
+        );
+      }
+
+      // The portfolio tools take the same index params, and only the in-process
+      // wire tests would notice if they disappeared from the schema.
+      for (const name of ["get_portfolio", "generate_report"]) {
+        const schema = tools.find((t) => t.name === name)!.inputSchema as {
+          properties?: Record<string, unknown>;
+        };
+        assert.ok(
+          schema.properties?.["account_index"] !== undefined &&
+            schema.properties["dossier_index"] !== undefined,
+          `${name} should accept account_index and dossier_index`,
+        );
+      }
 
       const search = tools.find((t) => t.name === "search_asset")!;
       assert.ok(

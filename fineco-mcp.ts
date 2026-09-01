@@ -29,8 +29,14 @@ import {
   fetchTaxCarryForward,
   fetchTaxMinusByYear,
   fetchZeroCommissionEtfs,
+  DEFAULT_ACCOUNT_INDEX,
+  DEFAULT_DOSSIER_INDEX,
+  envIndex,
+  dividendsFromMovements,
+  fetchMovements,
   isIsoDate,
   login,
+  parseDateRange,
   logout,
   makeLogger,
   positionsAsRows,
@@ -50,6 +56,39 @@ type ConfigOverrides = {
   dateTo?: string | undefined;
   orderType?: string | undefined;
   orderDays?: number | undefined;
+  accountIndex?: number | undefined;
+  dossierIndex?: number | undefined;
+};
+
+// Per-call value, then the environment, then "0". Resolved here — and in the CLI's
+// own buildConfig — so no header site has to know about process.env.
+function resolveIndex(
+  override: number | undefined,
+  envValue: string | undefined,
+  fallback: string,
+): string {
+  if (override !== undefined) return String(override);
+  return envIndex(envValue, fallback);
+}
+
+// One definition for the four tools that accept them. Spelled out per tool, the
+// `.safe()` guard had to be added in eight places, and a ninth would have been
+// easy to miss.
+const indexParams = {
+  account_index: z
+    .number()
+    .int()
+    .nonnegative()
+    .safe()
+    .optional()
+    .describe("Fineco account index (default: 0, or FINECO_ACCOUNT_INDEX)."),
+  dossier_index: z
+    .number()
+    .int()
+    .nonnegative()
+    .safe()
+    .optional()
+    .describe("Fineco dossier index (default: 0, or FINECO_DOSSIER_INDEX)."),
 };
 
 async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
@@ -106,6 +145,16 @@ async function buildConfig(overrides?: ConfigOverrides): Promise<Config> {
     newsUrl: process.env.FINECO_NEWS_URL ?? NEWS_URL,
     instrumentListUrl:
       process.env.FINECO_INSTRUMENT_LIST_URL ?? INSTRUMENT_LIST_URL,
+    accountIndex: resolveIndex(
+      overrides?.accountIndex,
+      process.env.FINECO_ACCOUNT_INDEX,
+      DEFAULT_ACCOUNT_INDEX,
+    ),
+    dossierIndex: resolveIndex(
+      overrides?.dossierIndex,
+      process.env.FINECO_DOSSIER_INDEX,
+      DEFAULT_DOSSIER_INDEX,
+    ),
     syntheticCookies: process.env.FINECO_SYNTHETIC_COOKIES !== "0",
   };
 }
@@ -208,6 +257,24 @@ function errorContent(message: string, data?: unknown) {
   };
 }
 
+// The non-auth arm of every failure path. Carries the status through, plus the
+// 429 wait hint — errorContent already serialises a data payload, but every call
+// site was throwing that away.
+function apiErrorContent(result: {
+  error: string;
+  status?: number;
+  retryAfterSeconds?: number;
+}) {
+  const data: Record<string, unknown> = {};
+  if (result.status !== undefined) data["status"] = result.status;
+  if (result.retryAfterSeconds !== undefined) {
+    data["retryAfterSeconds"] = result.retryAfterSeconds;
+  }
+  return Object.keys(data).length === 0
+    ? errorContent(result.error)
+    : errorContent(result.error, data);
+}
+
 function authExpiredContent(error: string) {
   return errorContent(
     "Fineco authentication expired. I cleared the in-memory session. Retry the same tool call to log in again and fetch fresh data.",
@@ -235,7 +302,7 @@ async function runJsonTool(
     }
 
     if (!result.ok) {
-      return errorContent(result.error);
+      return apiErrorContent(result);
     }
 
     return jsonContent(result.data);
@@ -271,9 +338,13 @@ export function createFinecoMcpServer(): McpServer {
         .describe(
           "Output format (default: json). Shareable formats omit quantities, prices, and absolute values — they only include weights and P/L percentages.",
         ),
+      ...indexParams,
     },
-    async ({ format }) => {
-      const config = await buildConfig();
+    async ({ format, account_index, dossier_index }) => {
+      const config = await buildConfig({
+        accountIndex: account_index,
+        dossierIndex: dossier_index,
+      });
       const debug = makeLogger(config);
       try {
         const cookie = await getSessionCookie(config, debug);
@@ -285,7 +356,7 @@ export function createFinecoMcpServer(): McpServer {
         }
 
         if (!result.ok) {
-          return errorContent(result.error);
+          return apiErrorContent(result);
         }
 
         const output = renderOutput(result.data, format ?? "json");
@@ -312,10 +383,15 @@ export function createFinecoMcpServer(): McpServer {
         .describe(
           "Generate shareable report without quantities, prices, or absolute values (default: false)",
         ),
+      ...indexParams,
     },
-    async ({ output_path, shareable }) => {
+    async ({ output_path, shareable, account_index, dossier_index }) => {
       const reportPath = output_path ?? "portfolio-report.html";
-      const config = await buildConfig({ outPath: reportPath });
+      const config = await buildConfig({
+        outPath: reportPath,
+        accountIndex: account_index,
+        dossierIndex: dossier_index,
+      });
       const debug = makeLogger(config);
       try {
         const cookie = await getSessionCookie(config, debug);
@@ -327,7 +403,7 @@ export function createFinecoMcpServer(): McpServer {
         }
 
         if (!result.ok) {
-          return errorContent(result.error);
+          return apiErrorContent(result);
         }
 
         const html = renderOutput(
@@ -347,6 +423,92 @@ export function createFinecoMcpServer(): McpServer {
             },
           ],
         };
+      } catch (error) {
+        return errorContent((error as Error).message);
+      }
+    },
+  );
+
+  server.tool(
+    "get_movements",
+    "Fetch Fineco current-account and card movements for an explicit date range. Returns private transaction data. The current-account cash balance is the `balanceAccountAtSearchDate` field. Fineco enforces PSD2 SCA on this endpoint: a password-only session reads roughly the last 90 days, and older ranges fail with HTTP 451.",
+    {
+      date_from: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Start date in YYYY-MM-DD format."),
+      date_to: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("End date in YYYY-MM-DD format."),
+      ...indexParams,
+    },
+    async ({ date_from, date_to, account_index, dossier_index }) => {
+      const range = parseDateRange(date_from, date_to);
+      if (!range.ok) return errorContent(range.error);
+
+      return runJsonTool(
+        {
+          dateFrom: range.dateFrom,
+          dateTo: range.dateTo,
+          accountIndex: account_index,
+          dossierIndex: dossier_index,
+        },
+        fetchMovements,
+      );
+    },
+  );
+
+  server.tool(
+    "get_dividends",
+    "Summarise dividends and their withholding tax from Fineco current-account movements, over an explicit date range. Amounts are integer minor units (cents); `assumedCurrency` is EUR because movements carry no currency field. Movements name no ISIN or symbol, so `security` is a parsed label, not an instrument id. Fineco enforces PSD2 SCA here: a password-only session reads roughly the last 90 days, so this cannot produce a full-year figure.",
+    {
+      date_from: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Start date in YYYY-MM-DD format."),
+      date_to: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("End date in YYYY-MM-DD format."),
+      ...indexParams,
+    },
+    async ({ date_from, date_to, account_index, dossier_index }) => {
+      const range = parseDateRange(date_from, date_to);
+      if (!range.ok) return errorContent(range.error);
+
+      const config = await buildConfig({
+        dateFrom: range.dateFrom,
+        dateTo: range.dateTo,
+        accountIndex: account_index,
+        dossierIndex: dossier_index,
+      });
+      const debug = makeLogger(config);
+
+      try {
+        const cookie = await getSessionCookie(config, debug);
+        const result = await fetchMovements(config, cookie, debug);
+
+        // Both arms, spelled out: this tool transforms the result, so it cannot
+        // reuse runJsonTool, and a single-arm copy would drop either the session
+        // clear or the 429 hint.
+        if (!result.ok && result.authExpired) {
+          await clearSession(debug);
+          return authExpiredContent(result.error);
+        }
+
+        if (!result.ok) {
+          return apiErrorContent(result);
+        }
+
+        return jsonContent(
+          dividendsFromMovements(result.data.movimenti, {
+            dateFrom: range.dateFrom,
+            dateTo: range.dateTo,
+            capturedAt: new Date().toISOString(),
+            truncated: result.data.limitedResult,
+          }),
+        );
       } catch (error) {
         return errorContent((error as Error).message);
       }
@@ -450,6 +612,7 @@ export function createFinecoMcpServer(): McpServer {
         .number()
         .int()
         .nonnegative()
+        .safe()
         .optional()
         .describe("Number of days to include. Default: 0."),
     },
@@ -492,7 +655,7 @@ export function createFinecoMcpServer(): McpServer {
         const result = await fetchZeroCommissionEtfs(
           query === undefined ? {} : { query },
         );
-        if (!result.ok) return errorContent(result.error);
+        if (!result.ok) return apiErrorContent(result);
         return jsonContent(result.data);
       } catch (error) {
         return errorContent((error as Error).message);

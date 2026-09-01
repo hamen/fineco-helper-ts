@@ -66,6 +66,40 @@ Fetch the indices bar data:
 npm start -- market-indices --op-item "Fineco"
 ```
 
+Fetch current-account and card movements for an explicit date range (roughly the
+last 90 days; older ranges fail with HTTP 451 because of Strong Customer
+Authentication):
+
+```sh
+npm start -- movements 2026-08-01 2026-08-31 --op-item "Fineco"
+npm start -- movements 2026-08-01 2026-08-31 "your-user-id" "your-password"
+```
+
+The dates above are only an example. Pick a range inside the SCA window — a
+fixed range in a README goes stale and starts returning HTTP 451 the moment it
+falls outside the last 90 days.
+
+Both boundary dates are inclusive. The range is sent to the bank as UTC instants
+while the bank reports in Europe/Rome; observed ranges return both boundary days
+whole, which is how a naive-date comparison behaves, but the endpoint does not
+document this.
+
+Dividend pairing is an MCP-only feature: the `get_dividends` tool pairs the legs,
+while the CLI `movements` command above emits the raw rows the bank returned. The
+pairing groups a gross leg with its withholding by operation date and security
+label. Legs that the bank posts on different days stay apart, each
+marked `unpaired`: the totals are still right, the per-event split is not. The
+same key has the mirror limitation: two separate payments of the same security
+on the same day merge into one event with summed amounts. Totals stay right in
+that case too.
+
+When a description does not carry the expected prefix, `security` falls back to
+`progressivoMovimento` — a bank row id, not a security name — and such a leg can
+never pair, because that id is unique per row. A numeric-looking `security` with
+an `unpaired` marker is that shape, not a data error. `unpaired` names the leg
+that is **missing**: `unpaired: "withholding"` is a gross amount whose
+withholding was not found.
+
 Fetch tax carry-forward data for an explicit date range:
 
 ```sh
@@ -110,6 +144,8 @@ The MCP server exposes the same read-only flows:
 
 - `get_portfolio`
 - `generate_report`
+- `get_movements`
+- `get_dividends`
 - `search_asset`
 - `get_asset_details`
 - `get_market_indices`
@@ -122,6 +158,39 @@ The MCP server exposes the same read-only flows:
 
 `get_enrichment` returns structured JSON only. Markdown report generation stays
 CLI-only via `npm start -- enrichment ... --out enrichment.md`.
+
+`get_portfolio` in `json` format adds a `capturedAt` timestamp and a `weightPerc`
+per position. The `shareable-*` formats are unchanged.
+
+`get_movements` returns current-account and card transactions for an explicit date
+range. The current-account cash balance is the `balanceAccountAtSearchDate` field.
+
+`get_dividends` summarises dividends and their withholding tax from those same
+movements. Amounts are integer minor units (cents). `assumedCurrency` is `EUR`:
+movements carry no currency field, so this is inferred, not returned by the bank.
+Movements name no ISIN or symbol either, so `security` is a label parsed from the
+description rather than an instrument id. An event carries `unpaired` when only one
+of its two legs falls inside the range — note that a gross with no withholding is
+also the normal shape for an instrument with no Italian withholding, and nothing in
+the data distinguishes the two cases.
+
+**Both movement tools are bounded by Strong Customer Authentication.** Fineco
+enforces PSD2 SCA on that endpoint: a password-only session reads roughly the last
+90 days, and an older range fails with HTTP 451. `get_dividends` therefore cannot
+produce a full-year figure. A longer history needs an interactive SCA step-up,
+which this tool cannot perform.
+
+`get_portfolio`, `generate_report`, `get_movements` and `get_dividends` accept
+optional `account_index` and `dossier_index` parameters for a non-default Fineco
+account or dossier. There is no tool to list them: no endpoint for that is known.
+The `FINECO_ACCOUNT_INDEX` / `FINECO_DOSSIER_INDEX` environment variables are not
+limited to those four tools: they set the headers on every private JSON call the
+helper makes, search and tax and order data included. Only the per-call
+parameters are tool-scoped.
+
+When Fineco answers HTTP 429, the error payload carries `status` and, when the
+response says so, `retryAfterSeconds` — parsed from either legal form of the
+`Retry-After` header.
 
 Run it over stdio:
 
@@ -232,6 +301,8 @@ FINECO_OP_USER_FIELD     1Password user id field. Default: username.
 FINECO_OP_PASSWORD_FIELD 1Password password field. Default: password.
 FINECO_OUTPUT            json, raw, csv, html, shareable-html, or shareable-csv. Default: json.
 FINECO_DEBUG             Set to 1 for secret-safe request diagnostics.
+FINECO_ACCOUNT_INDEX     Fineco account index. Default: 0. Per-call account_index wins.
+FINECO_DOSSIER_INDEX     Fineco dossier index. Default: 0. Per-call dossier_index wins.
 FINECO_MCP_HOST          Streamable HTTP MCP host. Default: 127.0.0.1.
 FINECO_MCP_PORT          Streamable HTTP MCP port. Default: 3333.
 FINECO_MCP_PATH          Streamable HTTP MCP path. Default: /mcp.
