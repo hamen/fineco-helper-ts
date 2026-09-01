@@ -2074,6 +2074,10 @@ export type MovementsResult = {
   balanceAccountAtMovement?: number;
 };
 
+// 200_000 rows at the 250-row page size is 800 requests; the cap sits just above
+// that so a normal full range never reaches it.
+const MAX_MOVEMENT_PAGES = 1_000;
+
 // Pulls current-account + cards movements over an arbitrary date range,
 // auto-paginating with offset/limit until the API reports the last page.
 // This is what bypasses the web UI's statement-download cap.
@@ -2090,11 +2094,13 @@ export async function fetchMovements(
   const limit = 250;
   const all: Movement[] = [];
   let offset = 0;
+  let requests = 0;
   let limited = false;
   let balanceAtSearch: number | undefined;
   let balanceAtMovement: number | undefined;
 
   for (;;) {
+    requests += 1;
     const page = await fetchJsonApi<MovementsPage>(
       MOVEMENTS_URL,
       config,
@@ -2131,12 +2137,17 @@ export async function fetchMovements(
       `Movements: offset=${offset}, batch=${batch.length}, total=${all.length}, lastPage=${page.data.lastPage}`,
     );
 
-    // A page shorter than the limit is the last one, whether or not the API says
-    // so. Advancing by `limit` past a short page skips every row the server did
-    // not send, and `lastPage` is optional in the response.
-    if (page.data.lastPage || batch.length < limit) break;
-    offset += limit;
-    if (offset > 200_000) {
+    if (page.data.lastPage || batch.length === 0) break;
+    // Advance by what the page actually returned, not by `limit`. `lastPage` is
+    // optional in the response, so a short page without it would leave the next
+    // request starting past every row the server did not send. Advancing by the
+    // batch size skips nothing, and a short page that really was the last one
+    // costs one extra request that comes back empty and ends the loop.
+    offset += batch.length;
+    // Two backstops, because the offset alone no longer bounds the request count:
+    // pages advance by their own size now, so a server that answers one row at a
+    // time would keep the loop under the row cap for 200_000 requests.
+    if (offset > 200_000 || requests >= MAX_MOVEMENT_PAGES) {
       // Stopping early truncates the range just as surely as the API's own cap does.
       limited = true;
       break;

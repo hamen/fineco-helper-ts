@@ -438,3 +438,26 @@ describe("get_movements success payload", () => {
     assert.equal(payload.balanceAccountAtMovement, 1000);
   });
 });
+
+describe("MCP calendar dates", () => {
+  // The zod schema only checks the YYYY-MM-DD shape. `isIsoDate` is what rejects
+  // a day that does not exist, and nothing asserted that at the tool.
+  it("rejects a date that passes the shape check but is not a real day", async () => {
+    let reachedNetwork = false;
+
+    const result = await callTool(
+      "get_movements",
+      { date_from: "2026-02-30", date_to: "2026-03-31" },
+      () => {
+        reachedNetwork = true;
+        return new Response(JSON.stringify({ movimenti: [], lastPage: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+
+    assert.equal(reachedNetwork, false);
+    assert.match(result.content[0]!.text, /must (use|be in) YYYY-MM-DD format/);
+  });
+});

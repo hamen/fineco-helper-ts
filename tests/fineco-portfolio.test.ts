@@ -1285,23 +1285,31 @@ describe("fetchMovements", () => {
     }
   });
 
-  // `lastPage` is optional in the response. Advancing by the full limit past a
-  // short page skips every row the server did not send.
-  it("stops on a short page even when lastPage is absent", async () => {
+  // `lastPage` is optional in the response, and a short page does not prove the
+  // range is over. Advancing by the full limit past a short page would start the
+  // next request past every row the server did not send.
+  it("resumes from the rows it received when a short page omits lastPage", async () => {
     const originalFetch = globalThis.fetch;
     const offsets: number[] = [];
 
     globalThis.fetch = async (_input, init) => {
-      offsets.push(Number(JSON.parse(String(init?.body)).offset));
-      return new Response(
-        JSON.stringify({
-          movimenti: [
-            { dataOperazione: "2026-01-02", importo: 1 },
-            { dataOperazione: "2026-01-03", importo: 2 },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      const offset = Number(JSON.parse(String(init?.body)).offset);
+      offsets.push(offset);
+      const body =
+        offset === 0
+          ? {
+              movimenti: [
+                { dataOperazione: "2026-01-02", importo: 1 },
+                { dataOperazione: "2026-01-03", importo: 2 },
+              ],
+            }
+          : offset === 2
+            ? { movimenti: [{ dataOperazione: "2026-01-04", importo: 3 }] }
+            : { movimenti: [] };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     };
 
     try {
@@ -1311,8 +1319,40 @@ describe("fetchMovements", () => {
         () => {},
       );
 
-      assert.deepEqual(offsets, [0]);
-      assert.equal(result.ok && result.data.count, 2);
+      // Second request starts at 2, not at 250: the third row would be lost.
+      assert.deepEqual(offsets, [0, 2, 3]);
+      assert.equal(result.ok && result.data.count, 3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("stops on a short page that is followed by an empty one", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+
+    globalThis.fetch = async () => {
+      calls += 1;
+      const body =
+        calls === 1
+          ? { movimenti: [{ dataOperazione: "2026-01-02", importo: 1 }] }
+          : { movimenti: [] };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(calls, 2);
+      assert.equal(result.ok && result.data.count, 1);
+      assert.equal(result.ok && result.data.limitedResult, false);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1380,6 +1420,36 @@ describe("fetchMovements", () => {
       );
 
       assert.equal(!result.ok && result.retryAfterSeconds, 30);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // The row cap alone would allow 200_000 requests against the bank if every page
+  // held one row, which is exactly the shape `offset += batch.length` permits.
+  it("stops on the page cap when every page holds a single row", async () => {
+    const originalFetch = globalThis.fetch;
+    let pages = 0;
+
+    globalThis.fetch = async () => {
+      pages += 1;
+      return new Response(
+        JSON.stringify({
+          movimenti: [{ dataOperazione: "2026-01-02", importo: 1 }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    try {
+      const result = await fetchMovements(
+        testConfig(range),
+        "session=test",
+        () => {},
+      );
+
+      assert.equal(pages, 1_000);
+      assert.equal(result.ok && result.data.limitedResult, true);
     } finally {
       globalThis.fetch = originalFetch;
     }
